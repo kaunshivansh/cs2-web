@@ -1095,7 +1095,13 @@ export default function Game() {
       }
     }
     function clearDroppedWeapons(){
-      while(droppedWeapons.length) removeDroppedWeapon(droppedWeapons[droppedWeapons.length - 1]);
+      while(droppedWeapons.length){
+        const w = droppedWeapons.pop();
+        if (w) {
+          scene.remove(w.group);
+          disposeObject3DResourcesWithOptions(w.group, { disposeTextureMaps: false });
+        }
+      }
     }
 
     function spawnDroppedBomb(pos:THREE.Vector3){
@@ -2608,11 +2614,20 @@ export default function Game() {
 
     let last=performance.now(),animId=0;
     function tick(){
-      const now=performance.now();const dt=Math.min(0.05,(now-last)/1000);last=now;
-      if(adaptiveQuality.sampleFrame(dt)) renderer.setPixelRatio(adaptiveQuality.pixelRatio);
-      if(state.started){updateSoundEvents(dt);updateRound(dt);updatePlayer(dt);for(const b of bots)updateBot(b,dt);updateDroppedWeapons(dt);updateHUD();}
-      dust.rotation.y+=dt*0.012;updateViewModel(dt);drawMinimap();
-      renderer.render(scene,camera);animId=requestAnimationFrame(tick);
+      try {
+        const now=performance.now();const dt=Math.min(0.05,(now-last)/1000);last=now;
+        if(adaptiveQuality.sampleFrame(dt)) renderer.setPixelRatio(adaptiveQuality.pixelRatio);
+        if(state.started){updateSoundEvents(dt);updateRound(dt);updatePlayer(dt);for(const b of bots)updateBot(b,dt);updateDroppedWeapons(dt);updateHUD();}
+        dust.rotation.y+=dt*0.012;updateViewModel(dt);drawMinimap();
+        renderer.render(scene,camera);animId=requestAnimationFrame(tick);
+      } catch (err: any) {
+        console.error("Game loop crashed:", err);
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(150,0,0,0.85);color:white;z-index:9999;padding:40px;font-family:monospace;white-space:pre-wrap;overflow:auto;';
+        overlay.textContent = `FATAL GAME LOOP ERROR:\n\n${err?.message}\n\n${err?.stack}`;
+        document.body.appendChild(overlay);
+        document.exitPointerLock?.();
+      }
     }
     tick();updateHUD();
 
