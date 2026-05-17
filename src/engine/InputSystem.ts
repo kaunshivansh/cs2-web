@@ -10,6 +10,7 @@ export class InputSystem {
     onMouseMove?: (dx: number, dy: number) => void;
     onMouseDown?: () => void;
     onMouseUp?: () => void;
+    onSecondaryFire?: () => void;
     onInteract?: () => void;
     onReload?: () => void;
     onDrop?: () => void;
@@ -72,8 +73,8 @@ export class InputSystem {
       this.mousePressed = true;
       this.callbacks.onMouseDown?.();
     } else if (e.button === 2) {
-      // Right click for scopes
-      this.callbacks.onMouseUp?.(); // Using onMouseUp for right click scope right now is a placeholder, handle cleanly
+      // Right click for scopes or secondary fire
+      this.callbacks.onSecondaryFire?.();
     }
   };
 
