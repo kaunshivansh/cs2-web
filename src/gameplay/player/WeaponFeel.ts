@@ -16,7 +16,7 @@ export function computePlayerSpread(weapon: WeaponConfig, input: SpreadInput): n
     (input.crouched ? weapon.crouchSpread : 0) +
     Math.min(0.055, input.recoilIndex * 0.0048);
 
-  if (weapon.scoped) spread *= input.scoped ? 0.24 : 6.5;
+  if (weapon.scoped) spread *= input.scoped ? 0.24 : 4.5;
   return Math.max(0, spread);
 }
 

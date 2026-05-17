@@ -302,11 +302,13 @@ export class AudioSystem {
   }
 
   public playRoundStart() {
+    this.unlock();
     this.playNoise(0.3, 880, 0.15, 'sine', 1200, 4);
     setTimeout(() => this.playNoise(0.2, 1100, 0.12, 'sine', 1400, 4), 200);
   }
 
   public playDefuseSuccess() {
+    this.unlock();
     this.playNoise(0.15, 1400, 0.18, 'sine', 2000, 6);
     setTimeout(() => this.playNoise(0.2, 1800, 0.15, 'sine', 2400, 6), 120);
   }

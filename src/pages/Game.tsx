@@ -1437,11 +1437,19 @@ export default function Game() {
       const try1=(ax:'x'|'y'|'z')=>{
         const n=pos.clone();n[ax]+=vel[ax]*dt;
         const mn=vec(n.x-r,n.y-eyeH,n.z-r),mx=vec(n.x+r,n.y+0.1,n.z+r);
-        for(const c of colliders){ if(mn.x<c.max.x&&mx.x>c.min.x&&mn.y<c.max.y&&mx.y>c.min.y&&mn.z<c.max.z&&mx.z>c.min.z){vel[ax]=0;return;} }
+        for(const c of colliders){ if(mn.x<c.max.x&&mx.x>c.min.x&&mn.y<c.max.y&&mx.y>c.min.y&&mn.z<c.max.z&&mx.z>c.min.z){
+          if(ax==='y'){
+            if(vel.y<0){pos.y=c.max.y+eyeH;vel.y=0;return true;}
+            else if(vel.y>0){pos.y=c.min.y-0.1;vel.y=0;return false;}
+          }
+          vel[ax]=0;return true;
+        } }
         pos[ax]=n[ax];
+        return false;
       };
-      try1('x');try1('z');pos.y+=vel.y*dt;
-      if(pos.y<eyeH){pos.y=eyeH;vel.y=0;return true;}return false;
+      try1('x');try1('z');const hit=try1('y');
+      if(pos.y<eyeH){pos.y=eyeH;vel.y=0;return true;}
+      return hit;
     }
 
     function applyGroundFriction(dt:number, friction:number){
@@ -1991,9 +1999,9 @@ export default function Game() {
       if(bot.aiState==='search'){
         const searchPos = bot.lastSeenPos || bot.heardSoundPos;
         if(searchPos&&(bot.lastSeenT<8||bot.heardSoundAge<4.5)){
-          botMoveTo(bot,searchPos,dt,w.moveSpeed*0.55);
-          // After 4s searching, go back to normal
-          if(bot.stateT>4.5)setAiState(bot,bot.team==='T'?'route':'hold');
+          const arrived = botMoveTo(bot,searchPos,dt,w.moveSpeed*0.55);
+          // After arriving or 4s searching, go back to normal
+          if(arrived || bot.stateT>4.5)setAiState(bot,bot.team==='T'?'route':'hold');
         } else {
           setAiState(bot,bot.team==='T'?'route':'hold');
         }
