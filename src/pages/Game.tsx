@@ -123,7 +123,7 @@ export default function Game() {
     };
 
     // ─── WEB AUDIO SOUND SYSTEM ──────────────────────────────────────────────
-    const { playGunshot: _playGunshot, playHitSound: _playHitSound, playFootstep: _playFootstep, playLandSound: _playLandSound, playScopeToggle: _playScopeToggle, playBombPlant: _playBombPlant, updateBombBeep: _updateBombBeep, stopBombBeep, playBombExplode: _playBombExplode, playRoundStart: _playRoundStart, playDefuseSuccess: _playDefuseSuccess, stopAmbience } = audioSystem;
+    const { playGunshot: _playGunshot, playHitSound: _playHitSound, playFootstep: _playFootstep, playLandSound: _playLandSound, playScopeToggle: _playScopeToggle, playBombPlant: _playBombPlant, updateBombBeep: _updateBombBeep, playBombExplode: _playBombExplode, playRoundStart: _playRoundStart, playDefuseSuccess: _playDefuseSuccess } = audioSystem;
     
     // Bind functions to preserve context and match existing code
     const playGunshot = (id: string) => audioSystem.playGunshot(id);
@@ -133,9 +133,11 @@ export default function Game() {
     const playScopeToggle = (scoped: boolean) => audioSystem.playScopeToggle(scoped);
     const playBombPlant = () => audioSystem.playBombPlant();
     const updateBombBeep = (timer: number) => audioSystem.updateBombBeep(timer);
+    const stopBombBeep = () => audioSystem.stopBombBeep();
     const playBombExplode = () => audioSystem.playBombExplode();
     const playRoundStart = () => audioSystem.playRoundStart();
     const playDefuseSuccess = () => audioSystem.playDefuseSuccess();
+    const stopAmbience = () => audioSystem.stopAmbience();
     const unlockAudio = () => {
       try { audioSystem.unlock(); } catch {}
     };
