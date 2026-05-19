@@ -141,66 +141,6 @@ export default function Game() {
     const unlockAudio = () => {
       try { audioSystem.unlock(); } catch {}
     };
-    function mkTex(fn: (ctx: CanvasRenderingContext2D, s: number) => void, s = 512) {
-      const c = document.createElement('canvas'); c.width = c.height = s;
-      const ctx = c.getContext('2d')!; fn(ctx, s);
-      const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping;
-      t.anisotropy = 16; t.colorSpace = THREE.SRGBColorSpace; return t;
-    }
-
-    const textures = {
-      asphalt: mkTex((ctx, s) => {
-        ctx.fillStyle = '#7a6d55'; ctx.fillRect(0, 0, s, s);
-        for (let i = 0; i < 6000; i++) {
-          const g = 40 + Math.random() * 80;
-          ctx.fillStyle = `rgba(${g},${g-4},${g-8},${0.1+Math.random()*0.2})`;
-          ctx.beginPath(); ctx.arc(Math.random()*s, Math.random()*s, Math.random()*2.5, 0, 6.28); ctx.fill();
-        }
-        for (let i=0;i<50;i++){ctx.strokeStyle=`rgba(20,14,8,${0.08+Math.random()*0.1})`;ctx.lineWidth=1+Math.random()*2;ctx.beginPath();ctx.moveTo(Math.random()*s,Math.random()*s);ctx.lineTo(Math.random()*s,Math.random()*s);ctx.stroke();}
-      }),
-      plaster: mkTex((ctx, s) => {
-        ctx.fillStyle='#8a7862';ctx.fillRect(0,0,s,s);
-        for(let i=0;i<3500;i++){const g=100+Math.random()*70;ctx.fillStyle=`rgba(${g},${g-2},${g-5},0.1)`;ctx.fillRect(Math.random()*s,Math.random()*s,1+Math.random()*3,1+Math.random()*3);}
-        for(let i=0;i<20;i++){ctx.fillStyle=`rgba(255,240,210,${0.03+Math.random()*0.04})`;ctx.fillRect(0,(i/20)*s,s,6+Math.random()*22);}
-      }),
-      concrete: mkTex((ctx, s) => {
-        ctx.fillStyle='#9e9282';ctx.fillRect(0,0,s,s);
-        for(let i=0;i<4000;i++){const g=110+Math.random()*70;ctx.fillStyle=`rgba(${g},${g},${g},0.08)`;ctx.fillRect(Math.random()*s,Math.random()*s,1+Math.random()*4,1+Math.random()*4);}
-      }),
-      metal: mkTex((ctx, s) => {
-        const g=ctx.createLinearGradient(0,0,s,0);g.addColorStop(0,'#6a7278');g.addColorStop(0.5,'#8a9298');g.addColorStop(1,'#6a7278');
-        ctx.fillStyle=g;ctx.fillRect(0,0,s,s);
-        for(let i=0;i<s;i+=12){ctx.fillStyle='rgba(255,255,255,0.04)';ctx.fillRect(0,i,s,6);}
-      }),
-      wood: mkTex((ctx, s) => {
-        ctx.fillStyle='#7a5535';ctx.fillRect(0,0,s,s);
-        for(let i=0;i<30;i++){ctx.strokeStyle=`rgba(${40+Math.random()*30},${20+Math.random()*20},${5+Math.random()*10},0.25)`;ctx.lineWidth=2+Math.random()*4;ctx.beginPath();ctx.moveTo(0,(i/30)*s+Math.random()*12);ctx.bezierCurveTo(s/3,Math.random()*s,s*2/3,Math.random()*s,s,(i/30)*s+Math.random()*12);ctx.stroke();}
-      }),
-      crate: mkTex((ctx, s) => {
-        ctx.fillStyle='#7a5c3a';ctx.fillRect(0,0,s,s);
-        ctx.strokeStyle='rgba(52,32,14,0.4)';ctx.lineWidth=16;ctx.strokeRect(8,8,s-16,s-16);
-        ctx.lineWidth=8;ctx.beginPath();ctx.moveTo(s/2,8);ctx.lineTo(s/2,s-8);ctx.moveTo(8,s/2);ctx.lineTo(s-8,s/2);ctx.stroke();
-        for(let i=0;i<2000;i++){const g=80+Math.random()*60;ctx.fillStyle=`rgba(${g},${g-8},${g-16},0.1)`;ctx.fillRect(Math.random()*s,Math.random()*s,1+Math.random()*3,1+Math.random()*3);}
-      }),
-      fabric: mkTex((ctx, s) => {
-        const g=ctx.createLinearGradient(0,0,s,s);g.addColorStop(0,'#c8943a');g.addColorStop(1,'#7a5425');
-        ctx.fillStyle=g;ctx.fillRect(0,0,s,s);
-        for(let i=0;i<s;i+=8){ctx.fillStyle='rgba(0,0,0,0.04)';ctx.fillRect(i,0,4,s);ctx.fillRect(0,i,s,4);}
-      }),
-      chain: mkTex((ctx, s) => {
-        ctx.clearRect(0,0,s,s);ctx.strokeStyle='rgba(180,190,200,0.5)';ctx.lineWidth=3;
-        const st=s/8;for(let i=-s;i<s*2;i+=st){ctx.beginPath();ctx.moveTo(i,0);ctx.lineTo(i-s,s);ctx.stroke();ctx.beginPath();ctx.moveTo(i,s);ctx.lineTo(i-s,0);ctx.stroke();}
-      })
-    };
-    textures.asphalt.repeat.set(18, 18);
-    textures.plaster.repeat.set(3, 1.5);
-    textures.concrete.repeat.set(2, 1);
-    textures.metal.repeat.set(2, 1);
-    textures.wood.repeat.set(2, 2);
-    textures.crate.repeat.set(1, 1);
-    textures.fabric.repeat.set(3, 2);
-    textures.chain.repeat.set(4, 1);
-
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x8fa4b2);
     scene.fog = new THREE.Fog(0x7f95a2, 32, 108);
@@ -272,7 +212,7 @@ export default function Game() {
         gunMetal: new THREE.MeshStandardMaterial({ color: 0x1a1e24, metalness: 0.78, roughness: 0.28 }),
         gunSteel: new THREE.MeshStandardMaterial({ color: 0x7a8390, metalness: 0.88, roughness: 0.18 }),
         gunPoly:  new THREE.MeshStandardMaterial({ color: 0x2a2e36, metalness: 0.2, roughness: 0.58 }),
-        gunWood:  new THREE.MeshStandardMaterial({ color: 0x6b4422, roughness: 0.72, metalness: 0.06, map: textures.wood }),
+        gunWood:  new THREE.MeshStandardMaterial({ color: 0x6b4422, roughness: 0.72, metalness: 0.06 }),
         gunTan:   new THREE.MeshStandardMaterial({ color: 0x706048, roughness: 0.65, metalness: 0.1 }),
         optic:    new THREE.MeshStandardMaterial({ color: 0x16191f, metalness: 0.55, roughness: 0.28 }),
         lens:     new THREE.MeshStandardMaterial({ color: 0x103050, metalness: 0.2, roughness: 0.05, transparent: true, opacity: 0.7 }),
@@ -430,86 +370,11 @@ export default function Game() {
       return { group: g, muzzle };
     }
 
-    // ─── MAP ────────────────────────────────────────────────────────────────────
-    const mapMats = {
-      wall:     (c:number) => new THREE.MeshStandardMaterial({ color:c, map:textures.plaster, roughness:0.92, metalness:0.04 }),
-      concrete: (c:number) => new THREE.MeshStandardMaterial({ color:c, map:textures.concrete, roughness:0.90, metalness:0.06 }),
-      cover:    (c:number) => new THREE.MeshStandardMaterial({ color:c, map:textures.crate, roughness:0.78, metalness:0.04 }),
-      metal:    (c:number) => new THREE.MeshStandardMaterial({ color:c, map:textures.metal, roughness:0.44, metalness:0.72 }),
-      fabric:   (c:number) => new THREE.MeshStandardMaterial({ color:c, map:textures.fabric, roughness:0.92, metalness:0.02 }),
-    };
-
     const minimapWalls: {x:number,z:number,w:number,d:number}[] = [];
 
-    function box(x:number,y:number,z:number,sx:number,sy:number,sz:number,c=0x6b6357,collide=true,kind:'wall'|'concrete'|'cover'|'metal'|'fabric'='wall') {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz), mapMats[kind](c));
-      mesh.position.set(x,y,z); mesh.castShadow = true; mesh.receiveShadow = true; scene.add(mesh);
-      if (collide) { colliders.push({ min:vec(x-sx/2,y-sy/2,z-sz/2), max:vec(x+sx/2,y+sy/2,z+sz/2) }); if (sy>1) minimapWalls.push({x,z,w:sx,d:sz}); }
-      return mesh;
-    }
-
-    function ramp(x:number,y:number,z:number,sx:number,sy:number,sz:number,c=0x7a6b54) {
-      const geo = new THREE.BoxGeometry(sx,sy,sz);
-      const verts = geo.attributes.position;
-      for (let i=0;i<verts.count;i++) { if (verts.getZ(i)<0) verts.setY(i,verts.getY(i)-sy/2); }
-      verts.needsUpdate = true; geo.computeVertexNormals();
-      const mesh = new THREE.Mesh(geo, mapMats.concrete(c));
-      mesh.position.set(x,y,z); mesh.castShadow = true; mesh.receiveShadow = true; scene.add(mesh);
-      colliders.push({ min:vec(x-sx/2,y-sy/2,z-sz/2), max:vec(x+sx/2,y+sy/2,z+sz/2) });
-    }
-
-    function containerBox(x:number,y:number,z:number,longX=true,c=0xa45335) {
-      const sx = longX ? 6.6 : 2.5;
-      const sz = longX ? 2.5 : 6.6;
-      box(x, y, z, sx, 2.6, sz, c, true, 'metal');
-      const ribCount = longX ? 5 : 5;
-      for (let i = 1; i <= ribCount; i++) {
-        if (longX) {
-          const px = x - sx / 2 + i * (sx / (ribCount + 1));
-          box(px, y, z, 0.12, 2.58, sz + 0.03, 0xced7e0, false, 'metal');
-        } else {
-          const pz = z - sz / 2 + i * (sz / (ribCount + 1));
-          box(x, y, pz, sx + 0.03, 2.58, 0.12, 0xced7e0, false, 'metal');
-        }
-      }
-      box(x, y + 1.36, z, sx * 0.94, 0.14, sz * 0.92, 0x2f3944, false, 'metal');
-    }
-
-    function catwalk(x:number,y:number,z:number,sx:number,sz:number,c=0x6f7f89) {
-      box(x, y, z, sx, 0.24, sz, c, false, 'metal');
-      box(x, y + 0.42, z - sz / 2 + 0.08, sx, 0.18, 0.12, 0xc9b36d, false, 'metal');
-      box(x, y + 0.42, z + sz / 2 - 0.08, sx, 0.18, 0.12, 0xc9b36d, false, 'metal');
-      colliders.push({ min:vec(x-sx/2,y-0.12,z-sz/2), max:vec(x+sx/2,y+0.12,z+sz/2) });
-    }
-
-    function lampPost(x:number,z:number,h=10.5) {
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.18,h,10), mapMats.metal(0x7a8790));
-      pole.position.set(x,h/2,z); pole.castShadow = pole.receiveShadow = true; scene.add(pole);
-      const head = new THREE.Mesh(new THREE.BoxGeometry(0.7,0.22,0.38), new THREE.MeshStandardMaterial({color:0x2c3136,emissive:new THREE.Color(0xffd89a),emissiveIntensity:0.65,metalness:0.55,roughness:0.34}));
-      head.position.set(x,h-0.3,z); scene.add(head);
-      const glow = new THREE.PointLight(0xffd6a2,0.75,24,2);
-      glow.position.set(x,h-0.45,z); scene.add(glow);
-    }
-
-    function groundPanel(x:number,z:number,sx:number,sz:number,c:number,opacity=1,y=0.03) {
-      const panel = new THREE.Mesh(new THREE.PlaneGeometry(sx,sz), new THREE.MeshStandardMaterial({color:c,transparent:opacity < 1,opacity,roughness:0.96,metalness:0.04}));
-      panel.rotation.x = -Math.PI / 2;
-      panel.position.set(x,y,z);
-      scene.add(panel);
-      return panel;
-    }
-
     // Floor
-    const floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(140,140), new THREE.MeshStandardMaterial({ color:0xb09870, map:textures.asphalt, roughness:0.98, metalness:0.02 }));
+    const floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(140,140), new THREE.MeshStandardMaterial({ color:0xb09870, roughness:0.98, metalness:0.02 }));
     floorMesh.rotation.x = -Math.PI/2; floorMesh.receiveShadow = true; scene.add(floorMesh);
-
-    // Dust ambient particles
-    const dustGeo = new THREE.BufferGeometry();
-    const dpos = new Float32Array(1800);
-    for(let i=0;i<dpos.length;i+=3){dpos[i]=(Math.random()-.5)*130;dpos[i+1]=Math.random()*9;dpos[i+2]=(Math.random()-.5)*130;}
-    dustGeo.setAttribute('position',new THREE.BufferAttribute(dpos,3));
-    const dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({color:0xc8ba9c,size:0.2,transparent:true,opacity:0.16,depthWrite:false}));
-    scene.add(dust);
 
     // CC0 modular map pieces from Kenney City Kit Roads.
     const mapKitGroup = new THREE.Group();
@@ -554,148 +419,11 @@ export default function Game() {
       });
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    //  HARBOR EXCHANGE
-    //  Ts spawn in a freight yard at the northwest edge.
-    //  CTs hold a southeast checkpoint feeding a dockyard and customs depot.
-    //  A Site is the dry dock on the west side, B Site is the warehouse yard east.
-    // ═══════════════════════════════════════════════════════════════════════════
-    const WH = 6.4;
     const A_SITE = vec(-30,0,-10);
     const B_SITE = vec(30,0,-18);
     const CT_SPAWN_POS = vec(24,0,28);
     const T_SPAWN_POS = vec(-24,0,-36);
 
-    // === OUTER BOUNDARY ===
-    box( 0, WH/2, -68, 136, WH, 1.2, 0x29323a, true, 'concrete');
-    box( 0, WH/2,  68, 136, WH, 1.2, 0x29323a, true, 'concrete');
-    box(-68, WH/2, 0, 1.2, WH, 136, 0x29323a, true, 'concrete');
-    box( 68, WH/2, 0, 1.2, WH, 136, 0x29323a, true, 'concrete');
-
-    // === SURFACE ZONES ===
-    groundPanel(-28,-10,30,40,0x8b6544,0.92); // dock timber / rust tone
-    groundPanel( 28,-18,32,28,0x646a70,0.96); // warehouse apron
-    groundPanel(  6,-10,32,56,0x727980,0.94); // customs boulevard
-    groundPanel(-22,-36,34,18,0x585c61,0.96); // freight yard
-    groundPanel( 22, 30,28,20,0x6d7379,0.95); // CT checkpoint
-    groundPanel(  0, 14,44,18,0x7c7f84,0.9);  // service road
-
-    // Rail and traffic marks
-    for (const x of [-6,-2,2,6]) groundPanel(x,-10,0.22,58,0xcfcfc0,0.95,0.034);
-    for (const z of [-22,-6,10,24]) groundPanel(8,z,18,0.16,0xf0dca2,0.88,0.034);
-
-    // === T FREIGHT YARD ===
-    box(-24, WH/2, -46, 34, WH, 1.2, 0x49555e, true, 'concrete');
-    box(-40, WH/2, -35, 1.2, WH, 22, 0x49555e, true, 'concrete');
-    box( -8, WH/2, -37, 1.2, WH, 18, 0x49555e, true, 'concrete');
-    box(-30, WH/2, -26, 16, WH, 1.2, 0x49555e, true, 'concrete');
-    box(-14, WH/2, -26, 10, WH, 1.2, 0x49555e, true, 'concrete');
-    containerBox(-33,1.3,-40,true,0xad5a34);
-    containerBox(-24,1.3,-40,true,0x356a8b);
-    containerBox(-31,1.3,-32,false,0x627745);
-    box(-18,0.8,-33,2.8,1.6,2.4,0x87684e,true,'cover');
-    box(-13,0.7,-38,2.4,1.4,2.0,0x7f6249,true,'cover');
-
-    // === A DRY DOCK ===
-    box(-52, WH/2, -8, 1.2, WH, 44, 0x3d484f, true, 'concrete');
-    box(-34, WH/2, 12, 36, WH, 1.2, 0x3d484f, true, 'concrete');
-    box(-34, WH/2, -30, 36, WH, 1.2, 0x3d484f, true, 'concrete');
-    box(-16, WH/2, -20, 1.2, WH, 18, 0x3d484f, true, 'concrete');
-    box(-16, WH/2,  10, 1.2, WH,  8, 0x3d484f, true, 'concrete');
-    box(-28, WH/2,  4, 20, WH, 1.2, 0x4f5d66, true, 'concrete');
-    containerBox(-42,1.3,-18,false,0xb44d3a);
-    containerBox(-42,1.3,-10,false,0x496f87);
-    containerBox(-28,1.3,-20,true,0x5b6b3a);
-    containerBox(-24,1.3,-4,true,0x8f5c2d);
-    box(-23,0.7,-15,3.0,1.4,2.2,0x8a6a4f,true,'cover');
-    box(-22,0.8,-14,2.2,1.6,2.2,0x6d7f8c,true,'metal');
-    box(-19,0.6,-6,2.6,1.2,2.2,0x826248,true,'cover');
-    const craneBase = box(-48,3.4,-8,2.2,6.8,2.2,0x6b7983,false,'metal');
-    const craneArm = new THREE.Mesh(new THREE.BoxGeometry(16,0.5,0.9), mapMats.metal(0xc8b06a));
-    craneArm.position.set(-41,7.1,-8); craneArm.castShadow = craneArm.receiveShadow = true; scene.add(craneArm);
-    const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.06,0.06,3.6,6), mapMats.metal(0x4b5258));
-    cable.position.set(-35.5,5.15,-8); scene.add(cable);
-    craneBase.visible = true;
-
-    // === MID CUSTOMS BOULEVARD ===
-    box(-4, WH/2, -20, 1.2, WH, 10, 0x53636f, true, 'concrete');
-    box(-4, WH/2,   6, 1.2, WH, 16, 0x53636f, true, 'concrete');
-    box(12, WH/2, -22, 1.2, WH, 12, 0x53636f, true, 'concrete');
-    box(12, WH/2,   4, 1.2, WH, 20, 0x53636f, true, 'concrete');
-    box( 4, WH/2,  16, 16, WH, 1.2, 0x53636f, true, 'concrete');
-    box( 4, WH/2, -30, 18, WH, 1.2, 0x53636f, true, 'concrete');
-    box( 4, 3.5, -8, 12, 0.5, 1.2, 0xd4b170, false, 'metal');
-    box( 4, 1.6, -8, 0.9, 3.2, 0.9, 0x6c7780, false, 'metal');
-    box(-1.5,1.6,-8,0.9,3.2,0.9,0x6c7780,false,'metal');
-    box( 9.5,1.6,-8,0.9,3.2,0.9,0x6c7780,false,'metal');
-    box(-1,0.8,-10,3.2,1.6,2.4,0x8a6e56,true,'cover');
-    box( 8,0.8, -6,3.6,1.6,2.2,0x6e7d89,true,'metal');
-    box( 2,0.7,  2,2.6,1.4,2.6,0x7d6853,true,'cover');
-    box( 9,0.6, 10,2.4,1.2,2.0,0x7c5a44,true,'cover');
-    box(-8,0.8, 16,6.8,1.6,2.4,0x5f6d77,true,'concrete');
-    box(16,0.8, 14,5.2,1.6,2.2,0x6d7881,true,'concrete');
-
-    // === B WAREHOUSE YARD ===
-    box(18, WH/2, -34, 1.2, WH, 24, 0x404b54, true, 'concrete');
-    box(18, WH/2,   4, 1.2, WH, 16, 0x404b54, true, 'concrete');
-    box(50, WH/2, -16, 1.2, WH, 36, 0x404b54, true, 'concrete');
-    box(34, WH/2, -34, 32, WH, 1.2, 0x404b54, true, 'concrete');
-    box(34, WH/2,   8, 32, WH, 1.2, 0x404b54, true, 'concrete');
-    box(34, WH/2,  -4, 1.2, WH, 14, 0x404b54, true, 'concrete');
-    box(42, 4.8, -16, 16, 0.5, 16, 0x525a63, false, 'concrete');
-    containerBox(24,1.3,-28,true,0x54773b);
-    containerBox(36,1.3,-28,false,0xb15a35);
-    containerBox(39,1.3,-22,true,0x4f6c84);
-    box(23,0.8,-18,3.8,1.6,2.4,0x445764,true,'metal');
-    box(31,0.7,-12,2.6,1.4,2.4,0x816550,true,'cover');
-    box(42,0.8,-12,4.2,1.6,2.6,0x59656f,true,'concrete');
-    ramp(24,1.2,-4,9,2.2,3,0x879099);
-    box(24,2.35,-10,9,0.24,6,0x7b858c,false,'metal');
-    colliders.push({min:vec(19.5,2.2,-13),max:vec(28.5,2.5,-7)});
-
-    // === CT CHECKPOINT ===
-    box(22, WH/2, 40, 26, WH, 1.2, 0x48545d, true, 'concrete');
-    box(12, WH/2, 28, 1.2, WH, 20, 0x48545d, true, 'concrete');
-    box(36, WH/2, 26, 1.2, WH, 24, 0x48545d, true, 'concrete');
-    box(21, WH/2, 18, 10, WH, 1.2, 0x48545d, true, 'concrete');
-    box(31, WH/2, 14, 10, WH, 1.2, 0x48545d, true, 'concrete');
-    containerBox(18,1.3,30,true,0x3b6482);
-    box(29,0.8,30,3.2,1.6,2.4,0x8a6a4f,true,'cover');
-    box(20,0.6,24,2.2,1.2,2.2,0x7c8186,true,'concrete');
-    box(30,0.6,22,2.4,1.2,2.0,0x7d5f47,true,'cover');
-
-    // === HARBOR DRESSING ===
-    lampPost(-46,-22,11.2); lampPost(-20,20,10.8); lampPost(12,22,11.6); lampPost(44,-30,11.2); lampPost(44,0,10.8);
-    for (const [bx,bz] of [[-46,-4],[-44,4],[46,-8],[46,-26],[6,28]]) {
-      const drum = new THREE.Mesh(new THREE.CylinderGeometry(0.36,0.38,1.1,16), new THREE.MeshStandardMaterial({color:0x31576b,metalness:0.42,roughness:0.54}));
-      drum.position.set(bx,0.55,bz); drum.castShadow = drum.receiveShadow = true; scene.add(drum);
-    }
-    for (const [x,z,w,d,col] of [[-30,-10,12,10,0x7b2f2f],[30,-18,12,10,0x6b342d]] as any[]) {
-      const pad = new THREE.Mesh(new THREE.PlaneGeometry(w,d), new THREE.MeshStandardMaterial({color:col,transparent:true,opacity:0.34}));
-      pad.rotation.x=-Math.PI/2; pad.position.set(x,0.42,z); scene.add(pad);
-    }
-
-    function stripe(x:number,z:number,sx:number,sz:number,c:number,rot=0) {
-      const m=new THREE.Mesh(new THREE.PlaneGeometry(sx,sz),new THREE.MeshStandardMaterial({color:c,transparent:true,opacity:0.86}));
-      m.rotation.x=-Math.PI/2;m.rotation.z=rot;m.position.set(x,0.035,z);scene.add(m);
-    }
-    stripe(-30,-10,8,0.24,0xe28f66, Math.PI/4); stripe(-30,-10,8,0.24,0xe28f66,-Math.PI/4);
-    stripe( 30,-18,8,0.24,0xe28f66, Math.PI/4); stripe( 30,-18,8,0.24,0xe28f66,-Math.PI/4);
-    stripe( 22, 28,10,0.24,0xf0dca2); stripe(-24,-34,10,0.24,0xf0dca2);
-
-    function siteMarker(label:string,x:number,z:number,col:string) {
-      const c=document.createElement('canvas');c.width=c.height=256;const ctx=c.getContext('2d')!;
-      ctx.fillStyle='rgba(20,16,10,0.22)';ctx.beginPath();ctx.arc(128,128,112,0,Math.PI*2);ctx.fill();
-      ctx.strokeStyle=col;ctx.lineWidth=14;ctx.beginPath();ctx.arc(128,128,90,0,Math.PI*2);ctx.stroke();
-      ctx.fillStyle=col;ctx.font='bold 130px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(label,128,140);
-      const t=new THREE.CanvasTexture(c);t.colorSpace=THREE.SRGBColorSpace;
-      const m=new THREE.Mesh(new THREE.PlaneGeometry(5.5,5.5),new THREE.MeshStandardMaterial({map:t,transparent:true,opacity:0.82,depthWrite:false}));
-      m.rotation.x=-Math.PI/2;m.position.set(x,0.46,z);scene.add(m);
-    }
-    siteMarker('A',A_SITE.x,A_SITE.z,'#dc8a66');
-    siteMarker('B',B_SITE.x,B_SITE.z,'#dc8a66');
-
-    // Premade CC0 road pieces from Kenney repositioned to fit the harbor layout.
     const roadTiles: Array<[string, number, number, number?]> = [
       ['road-straight', -24, -36, Math.PI / 2],
       ['road-straight',  -8, -28, Math.PI / 2],
@@ -726,21 +454,6 @@ export default function Game() {
       ['bridge-pillar-wide', 38, -6, 0, 10.5],
     ];
     kitProps.forEach(([name, x, z, rot = 0, scale = 10]) => placeMapAsset(name, x, z, rot, scale, 0.04));
-
-    // Harbor skyline silhouettes.
-    for (const [bx, bz, sx, sy, sz, col] of [
-      [-58,-44,12,20,10,0x31414d],[-58,20,11,16,10,0x475662],[-10,46,18,14,10,0x57626a],
-      [56,-38,12,18,12,0x38444f],[58,18,14,16,10,0x58615d],[46,42,12,14,12,0x4f565a],
-    ] as any[]) {
-      box(bx, sy / 2, bz, sx, sy, sz, col, false, 'concrete');
-      for (let wy = 3; wy < sy - 1; wy += 3) {
-        for (let wx = -sx * 0.36; wx <= sx * 0.36; wx += 2.5) {
-          const win = new THREE.Mesh(new THREE.PlaneGeometry(0.82, 0.56), new THREE.MeshStandardMaterial({color:0xaed3df,emissive:new THREE.Color(0x244554),emissiveIntensity:0.22,roughness:0.34,metalness:0.04}));
-          win.position.set(bx + wx, wy, bz + sz / 2 + 0.01);
-          scene.add(win);
-        }
-      }
-    }
 
     // ─── WEAPONS ────────────────────────────────────────────────────────────────
     // Using WEAPONS from WeaponData.ts
@@ -2620,7 +2333,7 @@ export default function Game() {
         const now=performance.now();const dt=Math.min(0.05,(now-last)/1000);last=now;
         if(adaptiveQuality.sampleFrame(dt)) renderer.setPixelRatio(adaptiveQuality.pixelRatio);
         if(state.started){updateSoundEvents(dt);updateRound(dt);updatePlayer(dt);for(const b of bots)updateBot(b,dt);updateDroppedWeapons(dt);updateHUD();}
-        dust.rotation.y+=dt*0.012;updateViewModel(dt);drawMinimap();
+        updateViewModel(dt);drawMinimap();
         renderer.render(scene,camera);animId=requestAnimationFrame(tick);
       } catch (err: any) {
         console.error("Game loop crashed:", err);
