@@ -399,13 +399,19 @@ export default function Game() {
       });
     }
 
-    function placeMapAsset(name: string, x: number, z: number, rotation = 0, scale = 10, y = 0.035) {
+    function placeMapAsset(name: string, x: number, z: number, rotation = 0, scale = 10, y = 0.035, addCollider = false) {
       const addClone = (source: THREE.Group) => {
         const clone = source.clone(true);
         clone.position.set(x, y, z);
         clone.rotation.y = rotation;
         clone.scale.setScalar(scale);
         mapKitGroup.add(clone);
+        if (addCollider) {
+          const b3 = new THREE.Box3().setFromObject(clone);
+          colliders.push({ min: b3.min.clone(), max: b3.max.clone() });
+          const size = b3.getSize(new THREE.Vector3());
+          minimapWalls.push({ x, z, w: size.x, d: size.z });
+        }
       };
       const cached = mapAssetCache.get(name);
       if (cached) { addClone(cached); return; }
@@ -423,6 +429,14 @@ export default function Game() {
     const B_SITE = vec(30,0,-18);
     const CT_SPAWN_POS = vec(24,0,28);
     const T_SPAWN_POS = vec(-24,0,-36);
+
+    // Perimeter barriers to keep the game in bounds
+    for(let i=-65; i<=65; i+=10.5) {
+      placeMapAsset('road-straight-barrier', i, -65, 0, 10.5, 0.024, true);
+      placeMapAsset('road-straight-barrier', i, 65, Math.PI, 10.5, 0.024, true);
+      placeMapAsset('road-straight-barrier', -65, i, -Math.PI/2, 10.5, 0.024, true);
+      placeMapAsset('road-straight-barrier', 65, i, Math.PI/2, 10.5, 0.024, true);
+    }
 
     const roadTiles: Array<[string, number, number, number?]> = [
       ['road-straight', -24, -36, Math.PI / 2],
@@ -453,7 +467,7 @@ export default function Game() {
       ['bridge-pillar-wide', 30, -6, 0, 10.5],
       ['bridge-pillar-wide', 38, -6, 0, 10.5],
     ];
-    kitProps.forEach(([name, x, z, rot = 0, scale = 10]) => placeMapAsset(name, x, z, rot, scale, 0.04));
+    kitProps.forEach(([name, x, z, rot = 0, scale = 10]) => placeMapAsset(name, x, z, rot, scale, 0.04, true));
 
     // ─── WEAPONS ────────────────────────────────────────────────────────────────
     // Using WEAPONS from WeaponData.ts
@@ -718,6 +732,30 @@ export default function Game() {
       worldWeapon.group.rotation.set(0,-Math.PI/2,Math.PI/2);
       worldWeapon.group.position.set(0,0.02,0.2); worldWeapon.group.scale.multiplyScalar(0.88);
       weaponMount.add(worldWeapon.group);
+
+      // Sidearm on hip
+      const hipPistol = createWeaponModel(isCT ? 'usp' : 'glock', 'world', team as Team);
+      hipPistol.group.position.set(0.24, 0.75, -0.05);
+      hipPistol.group.rotation.set(0, 0, Math.PI / 2);
+      hipPistol.group.scale.setScalar(0.38);
+      g.add(hipPistol.group);
+
+      // Knife on vest
+      const knifeOnVest = createWeaponModel('knife', 'world', team as Team);
+      knifeOnVest.group.position.set(-0.18, 1.1, 0.22);
+      knifeOnVest.group.rotation.set(0, 0, Math.PI);
+      knifeOnVest.group.scale.setScalar(0.35);
+      g.add(knifeOnVest.group);
+
+      // Headset
+      const matHeadset = new THREE.MeshStandardMaterial({color:0x222222, roughness:0.6});
+      const headsetBand = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.02, 8, 24, Math.PI), matHeadset);
+      headsetBand.position.set(0, 1.78, 0);
+      headsetBand.rotation.z = Math.PI / 2;
+      g.add(headsetBand);
+      const earCupGeo = new THREE.CylinderGeometry(0.06, 0.06, 0.04, 12);
+      const earL = new THREE.Mesh(earCupGeo, matHeadset); earL.position.set(-0.21, 1.66, 0); earL.rotation.z = Math.PI/2; g.add(earL);
+      const earR = new THREE.Mesh(earCupGeo, matHeadset); earR.position.set( 0.21, 1.66, 0); earR.rotation.z = Math.PI/2; g.add(earR);
 
       // CT badge on arm
       if(isCT){
