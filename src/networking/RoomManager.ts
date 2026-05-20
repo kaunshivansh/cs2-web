@@ -110,9 +110,11 @@ export class RoomManager {
         this.addPlayerToRoom(conn.peer, data.name);
       } else if (data.type === 'PLAYER_UPDATE') {
         this.updatePlayerData(conn.peer, data.player);
-        this.broadcast(data); // Relay to others
+        this.broadcast(data, [conn.peer]); // Relay to others, except sender
       } else if (data.type === 'ACTION') {
-        this.broadcast(data);
+        this.broadcast(data, [conn.peer]);
+      } else if (data.type === 'REQUEST_TEAM') {
+        this.handleTeamRequest(conn.peer, data.team);
       }
     });
 
@@ -120,6 +122,29 @@ export class RoomManager {
       this.connections.delete(conn.peer);
       this.removePlayerFromRoom(conn.peer);
     });
+  }
+
+  private handleTeamRequest(id: string, team: Team) {
+    const player = this.state.players.find(p => p.id === id);
+    if (!player) return;
+
+    const teamSize = this.state.settings.teamSize;
+    const count = this.state.players.filter(p => p.team === team).length;
+
+    if (team === 'Spectator' || count < teamSize) {
+      player.team = team;
+      this.broadcastState();
+      this.onStateChange(this.state);
+    }
+  }
+
+  public requestTeam(team: Team) {
+    if (this.isHost) {
+      this.handleTeamRequest(this.peer!.id, team);
+    } else {
+      const hostConn = Array.from(this.connections.values())[0];
+      if (hostConn) hostConn.send({ type: 'REQUEST_TEAM', team });
+    }
   }
 
   private setupConnection(conn: DataConnection, playerName: string) {
@@ -186,10 +211,10 @@ export class RoomManager {
   public sendUpdate(update: any) {
     if (this.isHost) {
       this.updatePlayerData(this.peer!.id, update.player);
-      this.broadcast(update);
+      this.broadcast(update, [this.peer!.id]);
     } else {
       const hostConn = Array.from(this.connections.values())[0];
-      if (hostConn) hostConn.send(update);
+      if (hostConn && hostConn.open) hostConn.send(update);
     }
   }
 
@@ -200,9 +225,9 @@ export class RoomManager {
     }
   }
 
-  private broadcast(data: any) {
+  private broadcast(data: any, exclude: string[] = []) {
     this.connections.forEach(conn => {
-      if (conn.open) conn.send(data);
+      if (conn.open && !exclude.includes(conn.peer)) conn.send(data);
     });
   }
 

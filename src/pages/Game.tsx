@@ -237,7 +237,7 @@ export default function Game() {
     let activeViewWeaponId = '';
     let activeViewTeam: Team = 'CT';
 
-    const remotePlayers = new Map<string, { obj: THREE.Group, body: THREE.Mesh, head: THREE.Mesh, weaponMount: THREE.Group }>();
+    const remotePlayers = new Map<string, { obj: THREE.Group, body: THREE.Mesh, head: THREE.Mesh, weaponMount: THREE.Group, targetPos: THREE.Vector3, targetYaw: number, targetPitch: number }>();
 
     roomManager.onNetworkEvent((event) => {
       if (event.type === 'PLAYER_UPDATE') {
@@ -248,18 +248,33 @@ export default function Game() {
         if (!remote) {
           const model = createBotModel(data.team, data.weapon);
           scene.add(model.group);
-          remote = { obj: model.group, body: model.body, head: model.head, weaponMount: model.weaponMount };
+          remote = { 
+            obj: model.group, body: model.body, head: model.head, weaponMount: model.weaponMount,
+            targetPos: new THREE.Vector3(data.pos.x, data.pos.y - 1.55, data.pos.z),
+            targetYaw: data.yaw, targetPitch: data.pitch
+          };
           remotePlayers.set(data.id, remote);
         }
 
-        remote.obj.position.set(data.pos.x, data.pos.y - 1.55, data.pos.z);
-        remote.obj.rotation.y = data.yaw;
-        remote.head.rotation.x = data.pitch;
-        
-        // Sync weapon if changed
-        // ... simplified for now
+        remote.targetPos.set(data.pos.x, data.pos.y - 1.55, data.pos.z);
+        remote.targetYaw = data.yaw;
+        remote.targetPitch = data.pitch;
       }
     });
+
+    function updateRemotePlayers(dt: number) {
+      remotePlayers.forEach((remote) => {
+        // Linear interpolation for smooth movement
+        remote.obj.position.lerp(remote.targetPos, 0.15);
+        
+        // Simple angle lerp
+        const angleDiff = remote.targetYaw - remote.obj.rotation.y;
+        remote.obj.rotation.y += angleDiff * 0.2;
+        
+        const pitchDiff = remote.targetPitch - remote.head.rotation.x;
+        remote.head.rotation.x += pitchDiff * 0.2;
+      });
+    }
 
     function createWeaponMaterialSet() {
       return {
@@ -2457,6 +2472,7 @@ export default function Game() {
             roomManager.broadcastState({ phase: state.phase, timer: state.phaseT });
           }
         }
+        updateRemotePlayers(dt);
         updateViewModel(dt);drawMinimap();
         renderer.render(scene,camera);animId=requestAnimationFrame(tick);
       } catch (err: any) {
@@ -2687,6 +2703,13 @@ export default function Game() {
 
             {menuState === 'mode' && (
               <div style={{textAlign:'center'}}>
+                <div style={{marginBottom: 20}}>
+                   <div style={{fontSize: 9, opacity: 0.5, letterSpacing: '0.2em', marginBottom: 10}}>SIDE PREFERENCE</div>
+                   <div style={{display: 'flex', justifyContent: 'center', gap: 10}}>
+                      <button className="game-buybtn" style={{width: 120, fontSize: 10, justifyContent: 'center', background: chosenTeam === 'CT' ? 'rgba(135,185,255,0.2)' : 'transparent', borderColor: chosenTeam === 'CT' ? '#87b9ff' : 'rgba(255,255,255,0.1)'}} onClick={() => setChosenTeam('CT')}>CT</button>
+                      <button className="game-buybtn" style={{width: 120, fontSize: 10, justifyContent: 'center', background: chosenTeam === 'T' ? 'rgba(240,163,102,0.2)' : 'transparent', borderColor: chosenTeam === 'T' ? '#f0a366' : 'rgba(255,255,255,0.1)'}} onClick={() => setChosenTeam('T')}>T</button>
+                   </div>
+                </div>
                 <div style={{marginBottom:32, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20}}>
                   <button className="game-buybtn" style={{padding: '30px', fontSize: 18, justifyContent: 'center'}} onClick={() => handleEnterMatch()}>
                     SINGLEPLAYER
@@ -2773,6 +2796,15 @@ export default function Game() {
                 <div style={{background: 'rgba(0,0,0,0.3)', padding: '20px', borderRadius: 16, marginBottom: 20}}>
                   <div style={{fontSize: 10, opacity: 0.5, letterSpacing: '0.2em'}}>ROOM CODE</div>
                   <div style={{fontSize: 24, fontWeight: 800, color: '#f4d89a'}}>{roomCode || 'Connecting...'}</div>
+                </div>
+
+                <div style={{marginBottom: 24}}>
+                  <div style={{fontSize: 9, opacity: 0.5, letterSpacing: '0.2em', marginBottom: 10}}>SWITCH TEAM</div>
+                  <div style={{display: 'flex', justifyContent: 'center', gap: 10}}>
+                    <button className="game-buybtn" style={{width: 100, fontSize: 10, justifyContent: 'center', background: 'rgba(135,185,255,0.1)', borderColor: 'rgba(135,185,255,0.3)'}} onClick={() => roomManager.requestTeam('CT')}>CT</button>
+                    <button className="game-buybtn" style={{width: 100, fontSize: 10, justifyContent: 'center', background: 'rgba(240,163,102,0.1)', borderColor: 'rgba(240,163,102,0.3)'}} onClick={() => roomManager.requestTeam('T')}>T</button>
+                    <button className="game-buybtn" style={{width: 100, fontSize: 10, justifyContent: 'center'}} onClick={() => roomManager.requestTeam('Spectator')}>SPEC</button>
+                  </div>
                 </div>
                 
                 <div style={{textAlign: 'left', marginBottom: 20}}>
