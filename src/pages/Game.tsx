@@ -28,6 +28,7 @@ import {
 import { getTeamVisualPalette } from '../rendering/viewmodel/TeamVisuals';
 import { buildAmmoView, buildScoreboardView } from '../ui/hud/ScoreboardModel';
 import { WEAPONS } from '../weapons/WeaponData';
+import { roomManager, type RoomState, type NetworkPlayer } from '../networking/RoomManager';
 
 const MAP_NAME = 'HARBOR EXCHANGE';
 const MAP_RADAR_NAME = 'HARBOR';
@@ -36,8 +37,14 @@ const MAP_TAGLINE = 'Tactical FPS · Harbor Terminal · Round-Based 5v5';
 export default function Game() {
   const [webglError, setWebglError] = useState(false);
   const [lobbyOpen, setLobbyOpen] = useState(true);
+  const [menuState, setMenuState] = useState<'mode' | 'multi-home' | 'create' | 'join' | 'lobby'>('mode');
   const [username, setUsername] = useState('');
   const [chosenTeam, setChosenTeam] = useState<Team>('CT');
+  const [roomCode, setRoomCode] = useState('');
+  const [roomSettings, setRoomSettings] = useState({ teamSize: 5, maxRounds: 15 });
+  const [networkPlayers, setNetworkPlayers] = useState<NetworkPlayer[]>([]);
+  const [isHost, setIsHost] = useState(false);
+  const [peerId, setPeerId] = useState('');
 
   const containerRef = useRef<HTMLDivElement>(null);
   const minimapRef = useRef<HTMLCanvasElement>(null);
@@ -78,8 +85,31 @@ export default function Game() {
   const scoreboardRef = useRef<HTMLDivElement>(null);
   // Game bridge refs — written before enterMatch, read by game loop
   const enterMatchRef = useRef<(() => void) | null>(null);
+  const gameBridgeRef = useRef<any>(null);
   const playerTeamRef = useRef<Team>('CT');
   const playerNameRef = useRef<string>('Player');
+
+  useEffect(() => {
+    roomManager.init((id) => {
+      setPeerId(id);
+    });
+
+    roomManager.onStateUpdate((networkState: RoomState) => {
+      setNetworkPlayers(networkState.players);
+      setRoomSettings(networkState.settings);
+      setRoomCode(networkState.code);
+
+      // Sync game logic state
+      if (!isHost && gameBridgeRef.current) {
+        gameBridgeRef.current.state.phase = networkState.phase;
+        gameBridgeRef.current.state.phaseT = networkState.timer;
+      }
+
+      if (networkState.started && lobbyOpen) {
+        handleEnterMatch(true);
+      }
+    });
+  }, []);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -206,6 +236,30 @@ export default function Game() {
     let activeViewMuzzle: THREE.Object3D | null = null;
     let activeViewWeaponId = '';
     let activeViewTeam: Team = 'CT';
+
+    const remotePlayers = new Map<string, { obj: THREE.Group, body: THREE.Mesh, head: THREE.Mesh, weaponMount: THREE.Group }>();
+
+    roomManager.onNetworkEvent((event) => {
+      if (event.type === 'PLAYER_UPDATE') {
+        const data = event.player;
+        if (data.id === roomManager.getMyId()) return;
+        
+        let remote = remotePlayers.get(data.id);
+        if (!remote) {
+          const model = createBotModel(data.team, data.weapon);
+          scene.add(model.group);
+          remote = { obj: model.group, body: model.body, head: model.head, weaponMount: model.weaponMount };
+          remotePlayers.set(data.id, remote);
+        }
+
+        remote.obj.position.set(data.pos.x, data.pos.y - 1.55, data.pos.z);
+        remote.obj.rotation.y = data.yaw;
+        remote.head.rotation.x = data.pitch;
+        
+        // Sync weapon if changed
+        // ... simplified for now
+      }
+    });
 
     function createWeaponMaterialSet() {
       return {
@@ -504,6 +558,7 @@ export default function Game() {
       recoilIdx:0, alive:true, team:'CT', hasBomb:false, jumpLock:false, jumpBuffer:0, landBob:0, switchBob:1,
       stepNoiseCd:0,
       kills:0, deaths:0,
+      shooting: false,
     };
     const state: any = {
       started:false, round:1, ctScore:0, tScore:0, maxRounds:15,
@@ -511,6 +566,7 @@ export default function Game() {
       ctLossStreak:0, tLossStreak:0, roundHistory:[] as {winner:string}[],
       specTarget:null as any, specIdx:0, scoreboardOpen:false,
     };
+    gameBridgeRef.current = { state };
     let soundEvents: AudibleEvent[] = [];
 
     function emitSoundEvent(team: Team | 'neutral', position: THREE.Vector3, kind: AudibleEvent['kind'], loudness: number) {
@@ -914,6 +970,7 @@ export default function Game() {
     ];
 
     function configureBots(){
+      if (menuState !== 'mode') return;
       const playerOnCT = player.team === 'CT';
       const ctSpawns = playerOnCT
         ? [vec(16,0,30),vec(20,0,28),vec(24,0,30),vec(28,0,28)]
@@ -1347,6 +1404,7 @@ export default function Game() {
       camera.rotation.set(player.pitch,player.yaw,0,'YXZ');
       if(player.shootCD>0)player.shootCD-=dt;
       if(player.reloading){player.reloadT-=dt;if(player.reloadT<=0)finishReload();}
+      player.shooting = mouseDown;
       if(ce){const wa=w.auto&&mouseDown;const ws=!w.auto&&mousePressed;if(wa||ws){const f=playerShoot();if(f&&!w.auto)mousePressed=false;}}
       if(!mouseDown)mousePressed=false;
       if(!mouseDown&&player.recoilIdx>0&&player.shootCD<=0)player.recoilIdx=recoverRecoilIndex(player.recoilIdx, dt);
@@ -2370,7 +2428,35 @@ export default function Game() {
       try {
         const now=performance.now();const dt=Math.min(0.05,(now-last)/1000);last=now;
         if(adaptiveQuality.sampleFrame(dt)) renderer.setPixelRatio(adaptiveQuality.pixelRatio);
-        if(state.started){updateSoundEvents(dt);updateRound(dt);updatePlayer(dt);for(const b of bots)updateBot(b,dt);updateDroppedWeapons(dt);updateHUD();}
+        if(state.started){
+          updateSoundEvents(dt);
+          // Multi: only host runs round logic
+          if (menuState === 'mode' || isHost) {
+            updateRound(dt);
+          }
+          updatePlayer(dt);
+          for(const b of bots)updateBot(b,dt);
+          updateDroppedWeapons(dt);
+          updateHUD();
+          roomManager.sendUpdate({
+            type: 'PLAYER_UPDATE',
+            player: {
+              id: roomManager.getMyId(),
+              name: playerNameRef.current,
+              team: player.team,
+              pos: { x: player.pos.x, y: player.pos.y, z: player.pos.z },
+              yaw: player.yaw,
+              pitch: player.pitch,
+              weapon: player.weapon,
+              hp: player.hp,
+              isShooting: player.shooting
+            }
+          });
+          if (isHost) {
+            // Broadcast state periodically
+            roomManager.broadcastState({ phase: state.phase, timer: state.phaseT });
+          }
+        }
         updateViewModel(dt);drawMinimap();
         renderer.render(scene,camera);animId=requestAnimationFrame(tick);
       } catch (err: any) {
@@ -2422,13 +2508,33 @@ export default function Game() {
 
   const isCT = chosenTeam === 'CT';
 
-  function handleEnterMatch() {
+  function handleEnterMatch(isMulti = false) {
     const name = username.trim() || 'Player';
     playerNameRef.current = name;
-    playerTeamRef.current = chosenTeam;
+    if (isMulti) {
+      const me = networkPlayers.find(p => p.id === roomManager.getMyId());
+      if (me) playerTeamRef.current = me.team as Team;
+    } else {
+      playerTeamRef.current = chosenTeam;
+    }
     setLobbyOpen(false);
     setTimeout(() => enterMatchRef.current?.(), 60);
   }
+
+  const onCreateRoom = () => {
+    roomManager.createRoom({ ...roomSettings, map: 'HARBOR' }, username || 'Player');
+    setIsHost(true);
+    setMenuState('lobby');
+  };
+
+  const onJoinRoom = () => {
+    roomManager.joinRoom(roomCode, username || 'Player');
+    setMenuState('lobby');
+  };
+
+  const onStartMultiplayerMatch = () => {
+    roomManager.startMatch();
+  };
 
   return (
     <div style={{position:'fixed',inset:0,background:'#0c0f12',color:'#f3eee2',fontFamily:'"Trebuchet MS","Arial Narrow",Arial,sans-serif',overflow:'hidden',userSelect:'none'}}>
@@ -2577,96 +2683,120 @@ export default function Game() {
                 background:'linear-gradient(135deg,#f5e8c8 10%,#d9ab5a 50%,#f5e8c8 90%)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent',backgroundClip:'text',textTransform:'uppercase'}}>
                 {MAP_NAME}
               </h1>
-              <div style={{marginTop:10,fontSize:10,letterSpacing:'.38em',color:'rgba(255,255,255,.34)'}}>TACTICAL SHOOTER · ECONOMY · BOMB MECHANICS · BOT AI</div>
             </div>
 
-            {/* ── Username field ── */}
-            <div style={{marginBottom:28,textAlign:'center'}}>
-              <label style={{display:'block',fontSize:9,letterSpacing:'.32em',color:'rgba(255,255,255,.45)',marginBottom:10,textTransform:'uppercase'}}>Player Name</label>
-              <div style={{position:'relative',maxWidth:320,margin:'0 auto'}}>
-                <span style={{position:'absolute',left:16,top:'50%',transform:'translateY(-50%)',fontSize:16,opacity:.5}}>✦</span>
+            {menuState === 'mode' && (
+              <div style={{textAlign:'center'}}>
+                <div style={{marginBottom:32, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20}}>
+                  <button className="game-buybtn" style={{padding: '30px', fontSize: 18, justifyContent: 'center'}} onClick={() => handleEnterMatch()}>
+                    SINGLEPLAYER
+                  </button>
+                  <button className="game-buybtn" style={{padding: '30px', fontSize: 18, justifyContent: 'center'}} onClick={() => setMenuState('multi-home')}>
+                    MULTIPLAYER
+                  </button>
+                </div>
+                <div style={{fontSize:10,letterSpacing:'.38em',color:'rgba(255,255,255,.34)'}}>CHOOSE YOUR EXPERIENCE</div>
+              </div>
+            )}
+
+            {menuState === 'multi-home' && (
+              <div style={{textAlign:'center'}}>
+                <div style={{marginBottom:20}}>
+                   <input
+                    type="text"
+                    maxLength={20}
+                    placeholder="Player Name..."
+                    value={username}
+                    onChange={e => setUsername(e.target.value)}
+                    style={{width:'100%', maxWidth: 300, boxSizing:'border-box',background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.12)',borderRadius:12,color:'#f3eee2',fontFamily:'inherit',fontSize:14,fontWeight:600,letterSpacing:'.08em',padding:'13px 16px',outline:'none',textAlign:'center', marginBottom: 20}}
+                  />
+                </div>
+                <div style={{marginBottom:32, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20}}>
+                  <button className="game-buybtn" style={{padding: '20px', justifyContent: 'center'}} onClick={() => setMenuState('create')}>
+                    CREATE ROOM
+                  </button>
+                  <button className="game-buybtn" style={{padding: '20px', justifyContent: 'center'}} onClick={() => setMenuState('join')}>
+                    JOIN ROOM
+                  </button>
+                </div>
+                <button style={{background:'none', border:'none', color:'rgba(255,255,255,0.4)', cursor:'pointer', fontSize:11, letterSpacing: '0.2em'}} onClick={() => setMenuState('mode')}>BACK</button>
+              </div>
+            )}
+
+            {menuState === 'create' && (
+              <div style={{textAlign:'center'}}>
+                <h3 style={{letterSpacing: '0.2em', marginBottom: 20}}>ROOM SETTINGS</h3>
+                <div style={{marginBottom:28, display: 'flex', justifyContent: 'center', gap: 20}}>
+                  <div>
+                    <label style={{display:'block', fontSize: 9, opacity: 0.5, marginBottom: 5}}>TEAM SIZE</label>
+                    <select value={roomSettings.teamSize} onChange={e => setRoomSettings({...roomSettings, teamSize: parseInt(e.target.value)})} style={{background: '#1a1e24', color: '#fff', border: '1px solid #333', padding: '10px', borderRadius: 8}}>
+                      {[1,2,3,4,5].map(n => <option key={n} value={n}>{n}v{n}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{display:'block', fontSize: 9, opacity: 0.5, marginBottom: 5}}>MAX ROUNDS</label>
+                    <select value={roomSettings.maxRounds} onChange={e => setRoomSettings({...roomSettings, maxRounds: parseInt(e.target.value)})} style={{background: '#1a1e24', color: '#fff', border: '1px solid #333', padding: '10px', borderRadius: 8}}>
+                      {[5,10,15,30].map(n => <option key={n} value={n}>{n} Rounds</option>)}
+                    </select>
+                  </div>
+                </div>
+                <button className="game-buybtn" style={{padding: '15px', justifyContent: 'center', maxWidth: 300, margin: '0 auto'}} onClick={onCreateRoom}>
+                  CREATE
+                </button>
+                <div style={{marginTop: 20}}>
+                  <button style={{background:'none', border:'none', color:'rgba(255,255,255,0.4)', cursor:'pointer', fontSize:11, letterSpacing: '0.2em'}} onClick={() => setMenuState('multi-home')}>BACK</button>
+                </div>
+              </div>
+            )}
+
+            {menuState === 'join' && (
+              <div style={{textAlign:'center'}}>
+                <h3 style={{letterSpacing: '0.2em', marginBottom: 20}}>ENTER ROOM CODE</h3>
                 <input
                   type="text"
-                  maxLength={20}
-                  placeholder="Enter your name…"
-                  value={username}
-                  onChange={e => setUsername(e.target.value)}
-                  onKeyDown={e => { if(e.key==='Enter') handleEnterMatch(); }}
-                  style={{width:'100%',boxSizing:'border-box',background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.12)',borderRadius:12,color:'#f3eee2',fontFamily:'inherit',fontSize:14,fontWeight:600,letterSpacing:'.08em',padding:'13px 16px 13px 40px',outline:'none',textAlign:'left'}}
-                  autoFocus
+                  placeholder="Code..."
+                  value={roomCode}
+                  onChange={e => setRoomCode(e.target.value)}
+                  style={{width:'100%', maxWidth: 300, boxSizing:'border-box',background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.12)',borderRadius:12,color:'#f3eee2',fontFamily:'inherit',fontSize:14,fontWeight:600,letterSpacing:'.08em',padding:'13px 16px',outline:'none',textAlign:'center', marginBottom: 20}}
                 />
-              </div>
-            </div>
-
-            {/* ── Side selection ── */}
-            <div style={{marginBottom:32}}>
-              <div style={{fontSize:9,letterSpacing:'.32em',color:'rgba(255,255,255,.4)',textAlign:'center',marginBottom:14,textTransform:'uppercase'}}>Choose Your Side</div>
-              <div className="game-team-grid" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
-
-                {/* CT Card */}
-                <button className="game-team-card" onClick={() => setChosenTeam('CT')} style={{
-                  background: chosenTeam==='CT' ? 'linear-gradient(160deg,rgba(28,50,82,.98),rgba(18,32,56,.95))' : 'linear-gradient(160deg,rgba(16,22,32,.7),rgba(12,16,24,.65))',
-                  border: chosenTeam==='CT' ? '1.5px solid rgba(135,185,255,.55)' : '1.5px solid rgba(135,185,255,.1)',
-                  borderRadius:18,padding:'22px 18px',cursor:'pointer',fontFamily:'inherit',color:'#f3eee2',
-                  boxShadow: chosenTeam==='CT' ? '0 0 28px rgba(100,160,255,.18),inset 0 1px 0 rgba(135,185,255,.12)' : 'none',
-                  transition:'all .2s',textAlign:'left',position:'relative',overflow:'hidden'}}>
-                  {chosenTeam==='CT' && <div style={{position:'absolute',top:0,left:0,right:0,height:2,background:'linear-gradient(90deg,transparent,rgba(135,185,255,.6),transparent)'}} />}
-                  <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:14}}>
-                    <div style={{width:44,height:44,borderRadius:12,background:'linear-gradient(135deg,rgba(40,80,140,.9),rgba(20,50,100,.8))',border:'1px solid rgba(135,185,255,.22)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:22}}>🛡</div>
-                    <div>
-                      <div style={{fontSize:16,fontWeight:800,letterSpacing:'.12em',color:'#87b9ff'}}>CT SIDE</div>
-                      <div style={{fontSize:9,letterSpacing:'.25em',color:'rgba(135,185,255,.6)',marginTop:2}}>COUNTER-TERRORIST</div>
-                    </div>
-                    {chosenTeam==='CT' && <div style={{marginLeft:'auto',width:18,height:18,borderRadius:'50%',background:'#87b9ff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,color:'#0a1828',fontWeight:900}}>✓</div>}
-                  </div>
-                  <div style={{fontSize:11,lineHeight:1.7,color:'rgba(255,255,255,.62)',letterSpacing:'.04em'}}>
-                    <div style={{marginBottom:4}}>🔵 Defuse the bomb before it detonates</div>
-                    <div style={{marginBottom:4}}>🔵 Hold angles, retake bomb sites</div>
-                    <div style={{marginBottom:4}}>🔵 Starting weapon: <span style={{color:'#87b9ff',fontWeight:700}}>USP-S</span></div>
-                    <div style={{marginTop:10,padding:'7px 10px',borderRadius:8,background:'rgba(135,185,255,.06)',border:'1px solid rgba(135,185,255,.1)',fontSize:10,letterSpacing:'.08em'}}>Buy: M4A1-S · MP9 · Defuse Kit</div>
-                  </div>
+                <button className="game-buybtn" style={{padding: '15px', justifyContent: 'center', maxWidth: 300, margin: '0 auto'}} onClick={onJoinRoom}>
+                  JOIN
                 </button>
-
-                {/* T Card */}
-                <button className="game-team-card" onClick={() => setChosenTeam('T')} style={{
-                  background: chosenTeam==='T' ? 'linear-gradient(160deg,rgba(72,36,18,.98),rgba(56,24,10,.95))' : 'linear-gradient(160deg,rgba(28,20,14,.7),rgba(20,14,10,.65))',
-                  border: chosenTeam==='T' ? '1.5px solid rgba(240,163,102,.55)' : '1.5px solid rgba(240,163,102,.1)',
-                  borderRadius:18,padding:'22px 18px',cursor:'pointer',fontFamily:'inherit',color:'#f3eee2',
-                  boxShadow: chosenTeam==='T' ? '0 0 28px rgba(240,130,60,.18),inset 0 1px 0 rgba(240,163,102,.12)' : 'none',
-                  transition:'all .2s',textAlign:'left',position:'relative',overflow:'hidden'}}>
-                  {chosenTeam==='T' && <div style={{position:'absolute',top:0,left:0,right:0,height:2,background:'linear-gradient(90deg,transparent,rgba(240,163,102,.6),transparent)'}} />}
-                  <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:14}}>
-                    <div style={{width:44,height:44,borderRadius:12,background:'linear-gradient(135deg,rgba(120,56,22,.9),rgba(80,32,8,.8))',border:'1px solid rgba(240,163,102,.22)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:22}}>💣</div>
-                    <div>
-                      <div style={{fontSize:16,fontWeight:800,letterSpacing:'.12em',color:'#f0a366'}}>T SIDE</div>
-                      <div style={{fontSize:9,letterSpacing:'.25em',color:'rgba(240,163,102,.6)',marginTop:2}}>TERRORIST</div>
-                    </div>
-                    {chosenTeam==='T' && <div style={{marginLeft:'auto',width:18,height:18,borderRadius:'50%',background:'#f0a366',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,color:'#2a1000',fontWeight:900}}>✓</div>}
-                  </div>
-                  <div style={{fontSize:11,lineHeight:1.7,color:'rgba(255,255,255,.62)',letterSpacing:'.04em'}}>
-                    <div style={{marginBottom:4}}>🟠 Plant the bomb at site A or B</div>
-                    <div style={{marginBottom:4}}>🟠 Rush, execute, force CT rotations</div>
-                    <div style={{marginBottom:4}}>🟠 Starting weapon: <span style={{color:'#f0a366',fontWeight:700}}>Glock-18</span></div>
-                    <div style={{marginTop:10,padding:'7px 10px',borderRadius:8,background:'rgba(240,163,102,.06)',border:'1px solid rgba(240,163,102,.1)',fontSize:10,letterSpacing:'.08em'}}>Buy: AK-47 · MAC-10 · Pick up bomb</div>
-                  </div>
-                </button>
+                <div style={{marginTop: 20}}>
+                  <button style={{background:'none', border:'none', color:'rgba(255,255,255,0.4)', cursor:'pointer', fontSize:11, letterSpacing: '0.2em'}} onClick={() => setMenuState('multi-home')}>BACK</button>
+                </div>
               </div>
-            </div>
+            )}
 
-            {/* Enter button */}
-            <div style={{textAlign:'center'}}>
-              <button onClick={handleEnterMatch} style={{
-                background: isCT ? 'linear-gradient(180deg,#6fa8e8,#3a78c4)' : 'linear-gradient(180deg,#e8a45a,#c47230)',
-                color:'#fff',border:'none',padding:'15px 52px',fontFamily:'inherit',fontSize:13,fontWeight:800,
-                letterSpacing:'.36em',cursor:'pointer',borderRadius:999,
-                boxShadow: isCT ? '0 12px 36px rgba(80,140,240,.32)' : '0 12px 36px rgba(200,100,30,.32)',
-                transition:'transform .14s,box-shadow .14s',textTransform:'uppercase'}}>
-                ENTER MATCH
-              </button>
-              <div style={{marginTop:12,fontSize:9,letterSpacing:'.22em',color:'rgba(255,255,255,.3)'}}>
-                WASD · MOUSE AIM · LMB FIRE · 1/2/3 SLOTS · B BUY · TAB SCORE
+            {menuState === 'lobby' && (
+              <div style={{textAlign:'center'}}>
+                <div style={{background: 'rgba(0,0,0,0.3)', padding: '20px', borderRadius: 16, marginBottom: 20}}>
+                  <div style={{fontSize: 10, opacity: 0.5, letterSpacing: '0.2em'}}>ROOM CODE</div>
+                  <div style={{fontSize: 24, fontWeight: 800, color: '#f4d89a'}}>{roomCode || 'Connecting...'}</div>
+                </div>
+                
+                <div style={{textAlign: 'left', marginBottom: 20}}>
+                   <div style={{fontSize: 9, opacity: 0.5, letterSpacing: '0.2em', marginBottom: 10}}>PLAYERS ({networkPlayers.length})</div>
+                   <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10}}>
+                      {networkPlayers.map(p => (
+                        <div key={p.id} style={{background: 'rgba(255,255,255,0.05)', padding: '10px 15px', borderRadius: 10, display: 'flex', justifyContent: 'space-between', border: p.id === roomManager.getMyId() ? '1px solid #f4d89a' : '1px solid transparent'}}>
+                          <span>{p.name} {p.isHost ? '👑' : ''}</span>
+                          <span style={{fontSize: 10, opacity: 0.6, color: p.team === 'CT' ? '#87b9ff' : p.team === 'T' ? '#f0a366' : '#fff'}}>{p.team.toUpperCase()}</span>
+                        </div>
+                      ))}
+                   </div>
+                </div>
+
+                {isHost ? (
+                  <button className="game-buybtn" style={{padding: '15px', justifyContent: 'center', maxWidth: 300, margin: '0 auto', background: 'linear-gradient(180deg,#92d7a3,#4caf50)', color: '#000'}} onClick={onStartMultiplayerMatch}>
+                    START MATCH
+                  </button>
+                ) : (
+                  <div style={{fontSize: 12, letterSpacing: '0.1em', opacity: 0.8}}>Waiting for host to start...</div>
+                )}
               </div>
-            </div>
+            )}
+
           </div>
         </div>
       )}
@@ -2708,6 +2838,8 @@ export default function Game() {
         .game-score-row span:not(.game-score-name){text-align:right}
         .game-score-name{font-weight:800;color:#f3eee2;letter-spacing:.08em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .armed{color:#ff5552!important;animation:gm-pulse .55s infinite}
+        select:focus{outline:none;border-color:#f4d89a!important}
+        option{background:#1a1e24;color:#fff}
         @keyframes gm-pulse{50%{opacity:.38}}
         input::placeholder{color:rgba(255,255,255,.28)}
         input:focus{border-color:rgba(255,255,255,.28)!important;box-shadow:0 0 0 3px rgba(255,255,255,.06)}
