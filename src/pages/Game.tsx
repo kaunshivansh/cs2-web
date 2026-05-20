@@ -37,7 +37,7 @@ const MAP_TAGLINE = 'Tactical FPS · Harbor Terminal · Round-Based 5v5';
 export default function Game() {
   const [webglError, setWebglError] = useState(false);
   const [lobbyOpen, setLobbyOpen] = useState(true);
-  const [menuState, setMenuState] = useState<'mode' | 'multi-home' | 'create' | 'join' | 'lobby'>('mode');
+  const [menuState, setMenuState] = useState<'mode' | 'single-setup' | 'multi-home' | 'create' | 'join' | 'lobby'>('mode');
   const [username, setUsername] = useState('');
   const [chosenTeam, setChosenTeam] = useState<Team>('CT');
   const [roomCode, setRoomCode] = useState('');
@@ -103,6 +103,10 @@ export default function Game() {
       if (!isHost && gameBridgeRef.current) {
         gameBridgeRef.current.state.phase = networkState.phase;
         gameBridgeRef.current.state.phaseT = networkState.timer;
+        gameBridgeRef.current.state.ctScore = networkState.score.CT;
+        gameBridgeRef.current.state.tScore = networkState.score.T;
+        gameBridgeRef.current.state.round = networkState.round;
+        gameBridgeRef.current.state.attackSite = networkState.attackSite;
       }
 
       if (networkState.started && lobbyOpen) {
@@ -2469,7 +2473,13 @@ export default function Game() {
           });
           if (isHost) {
             // Broadcast state periodically
-            roomManager.broadcastState({ phase: state.phase, timer: state.phaseT });
+            roomManager.broadcastState({ 
+              phase: state.phase, 
+              timer: state.phaseT,
+              score: { CT: state.ctScore, T: state.tScore },
+              round: state.round,
+              attackSite: state.attackSite
+            });
           }
         }
         updateRemotePlayers(dt);
@@ -2703,15 +2713,8 @@ export default function Game() {
 
             {menuState === 'mode' && (
               <div style={{textAlign:'center'}}>
-                <div style={{marginBottom: 20}}>
-                   <div style={{fontSize: 9, opacity: 0.5, letterSpacing: '0.2em', marginBottom: 10}}>SIDE PREFERENCE</div>
-                   <div style={{display: 'flex', justifyContent: 'center', gap: 10}}>
-                      <button className="game-buybtn" style={{width: 120, fontSize: 10, justifyContent: 'center', background: chosenTeam === 'CT' ? 'rgba(135,185,255,0.2)' : 'transparent', borderColor: chosenTeam === 'CT' ? '#87b9ff' : 'rgba(255,255,255,0.1)'}} onClick={() => setChosenTeam('CT')}>CT</button>
-                      <button className="game-buybtn" style={{width: 120, fontSize: 10, justifyContent: 'center', background: chosenTeam === 'T' ? 'rgba(240,163,102,0.2)' : 'transparent', borderColor: chosenTeam === 'T' ? '#f0a366' : 'rgba(255,255,255,0.1)'}} onClick={() => setChosenTeam('T')}>T</button>
-                   </div>
-                </div>
                 <div style={{marginBottom:32, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20}}>
-                  <button className="game-buybtn" style={{padding: '30px', fontSize: 18, justifyContent: 'center'}} onClick={() => handleEnterMatch()}>
+                  <button className="game-buybtn" style={{padding: '30px', fontSize: 18, justifyContent: 'center'}} onClick={() => setMenuState('single-setup')}>
                     SINGLEPLAYER
                   </button>
                   <button className="game-buybtn" style={{padding: '30px', fontSize: 18, justifyContent: 'center'}} onClick={() => setMenuState('multi-home')}>
@@ -2719,6 +2722,35 @@ export default function Game() {
                   </button>
                 </div>
                 <div style={{fontSize:10,letterSpacing:'.38em',color:'rgba(255,255,255,.34)'}}>CHOOSE YOUR EXPERIENCE</div>
+              </div>
+            )}
+
+            {menuState === 'single-setup' && (
+              <div style={{textAlign:'center'}}>
+                <div style={{marginBottom:20}}>
+                   <input
+                    type="text"
+                    maxLength={20}
+                    placeholder="Player Name..."
+                    value={username}
+                    onChange={e => setUsername(e.target.value)}
+                    onKeyDown={e => { if(e.key==='Enter') handleEnterMatch(); }}
+                    style={{width:'100%', maxWidth: 300, boxSizing:'border-box',background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.12)',borderRadius:12,color:'#f3eee2',fontFamily:'inherit',fontSize:14,fontWeight:600,letterSpacing:'.08em',padding:'13px 16px',outline:'none',textAlign:'center', marginBottom: 20}}
+                  />
+                </div>
+                <div style={{marginBottom: 20}}>
+                   <div style={{fontSize: 9, opacity: 0.5, letterSpacing: '0.2em', marginBottom: 10}}>SIDE PREFERENCE</div>
+                   <div style={{display: 'flex', justifyContent: 'center', gap: 10}}>
+                      <button className="game-buybtn" style={{width: 120, fontSize: 10, justifyContent: 'center', background: chosenTeam === 'CT' ? 'rgba(135,185,255,0.2)' : 'transparent', borderColor: chosenTeam === 'CT' ? '#87b9ff' : 'rgba(255,255,255,0.1)'}} onClick={() => setChosenTeam('CT')}>CT</button>
+                      <button className="game-buybtn" style={{width: 120, fontSize: 10, justifyContent: 'center', background: chosenTeam === 'T' ? 'rgba(240,163,102,0.2)' : 'transparent', borderColor: chosenTeam === 'T' ? '#f0a366' : 'rgba(255,255,255,0.1)'}} onClick={() => setChosenTeam('T')}>T</button>
+                   </div>
+                </div>
+                <button className="game-buybtn" style={{padding: '15px', justifyContent: 'center', maxWidth: 300, margin: '0 auto'}} onClick={() => handleEnterMatch()}>
+                  START MATCH
+                </button>
+                <div style={{marginTop: 20}}>
+                  <button style={{background:'none', border:'none', color:'rgba(255,255,255,0.4)', cursor:'pointer', fontSize:11, letterSpacing: '0.2em'}} onClick={() => setMenuState('mode')}>BACK</button>
+                </div>
               </div>
             )}
 

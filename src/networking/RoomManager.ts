@@ -29,6 +29,9 @@ export interface RoomState {
   phase: string;
   timer: number;
   started: boolean;
+  score: { CT: number, T: number };
+  round: number;
+  attackSite: string;
 }
 
 export type NetworkEvent = 
@@ -49,7 +52,10 @@ export class RoomManager {
     players: [],
     phase: 'LOBBY',
     timer: 0,
-    started: false
+    started: false,
+    score: { CT: 0, T: 0 },
+    round: 1,
+    attackSite: 'A'
   };
 
   constructor() {}
