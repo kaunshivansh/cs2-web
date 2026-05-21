@@ -378,101 +378,95 @@ export default function Game() {
 
       switch(id) {
         case 'knife':
-          p(new box(0.06,0.06,0.24), M.gunPoly, 0.14,-0.22,-0.1, 0,0,0.16);
-          p(new box(0.02,0.015,0.52), M.gunSteel, 0.14,-0.22,-0.52, 0,0,0.04);
-          p(new box(0.06,0.02,0.07), M.gunSteel, 0.14,-0.22,-0.24);
-          p(new box(0.015,0.01,0.04), M.gunSteel, 0.19,-0.21,-0.7, 0,0,-0.15);
-          p(new box(0.015,0.01,0.04), M.gunSteel, 0.09,-0.23,-0.7, 0,0, 0.15);
+          p(new box(0.04,0.05,0.18), M.gunPoly, 0.14,-0.22,-0.1, 0,0,0.16); // Handle
+          p(new box(0.015,0.02,0.48), M.gunSteel, 0.14,-0.22,-0.48, 0,0,0.04); // Blade main
+          p(new box(0.015,0.04,0.16), M.gunSteel, 0.14,-0.21,-0.64, Math.PI/12,0,0.04); // Blade tip
+          p(new box(0.05,0.02,0.06), M.gunSteel, 0.14,-0.22,-0.24); // Guard
           muzzle.position.set(0.14,-0.22,-0.78); break;
 
         case 'usp':
-          p(new box(0.11,0.14,0.48), M.gunMetal, 0.18,-0.21,-0.32);
-          p(new box(0.095,0.09,0.38), M.gunSteel, 0.18,-0.145,-0.28);
-          p(new cyl(0.024,0.024,0.56,12), M.gunSteel, 0.18,-0.175,-0.78, 0,0,Math.PI/2);
-          p(new cyl(0.04,0.04,0.38,14), M.gunMetal, 0.18,-0.175,-1.14, 0,0,Math.PI/2);
-          p(new cyl(0.006,0.006,0.38,8), M.gunSteel, 0.18,-0.175,-1.14, 0,0,Math.PI/2);
-          p(new box(0.095,0.26,0.15), M.gunPoly, 0.16,-0.33,-0.07,-0.34);
-          p(new box(0.09,0.04,0.14), M.gunSteel, 0.18,-0.105,-0.28);
-          p(new box(0.02,0.015,0.46), M.gunMetal, 0.18,-0.108,-0.27);
-          p(new box(0.06,0.03,0.03), M.gunSteel, 0.18,-0.108,-0.52);
-          muzzle.position.set(0.18,-0.175,-1.33); break;
+          p(new box(0.11,0.14,0.48), M.gunPoly, 0.18,-0.21,-0.32); // Lower frame
+          p(new box(0.095,0.09,0.38), M.gunSteel, 0.18,-0.145,-0.28); // Slide
+          p(new cyl(0.026,0.026,0.64,12), M.gunMetal, 0.18,-0.165,-0.82, 0,0,Math.PI/2); // Suppressor
+          p(new box(0.095,0.26,0.15), M.gunPoly, 0.16,-0.33,-0.07,-0.34); // Grip
+          p(new box(0.02,0.015,0.46), M.gunMetal, 0.18,-0.108,-0.27); // Slide top detail
+          muzzle.position.set(0.18,-0.165,-1.14); break;
 
         case 'deagle':
-          p(new box(0.14,0.16,0.54), M.gunMetal, 0.20,-0.21,-0.33);
-          p(new box(0.13,0.12,0.46), M.gunSteel, 0.20,-0.12,-0.31);
-          p(new box(0.06,0.06,0.22), M.gunSteel, 0.20,-0.175,-0.68);
-          p(new box(0.12,0.28,0.17), M.gunPoly, 0.17,-0.36,-0.05,-0.38);
-          p(new box(0.08,0.04,0.08), M.gunSteel, 0.20,-0.08,-0.14);
-          p(new box(0.02,0.012,0.52), M.gunMetal, 0.20,-0.108,-0.30);
-          p(new box(0.06,0.03,0.03), M.gunSteel, 0.20,-0.108,-0.55);
-          muzzle.position.set(0.20,-0.175,-0.82); break;
+          p(new box(0.12,0.14,0.56), M.gunSteel, 0.20,-0.21,-0.33); // Lower frame
+          p(new box(0.14,0.12,0.48), M.gunSteel, 0.20,-0.12,-0.31); // Slide (heavy)
+          p(new box(0.10,0.28,0.17), M.gunPoly, 0.17,-0.36,-0.05,-0.38); // Grip
+          p(new box(0.08,0.06,0.24), M.gunSteel, 0.20,-0.175,-0.68); // Under barrel weight
+          p(new cyl(0.028,0.028,0.06,12), M.gunSteel, 0.20,-0.13,-0.60, 0,0,Math.PI/2); // Barrel tip
+          muzzle.position.set(0.20,-0.13,-0.64); break;
 
         case 'glock':
-          p(new box(0.10,0.12,0.44), M.gunMetal, 0.18,-0.21,-0.30);
-          p(new box(0.09,0.08,0.36), M.gunSteel, 0.18,-0.155,-0.27);
-          p(new box(0.09,0.23,0.16), M.gunTan,   0.16,-0.33,-0.08,-0.34);
-          p(new box(0.05,0.05,0.18), M.gunSteel, 0.18,-0.185,-0.57);
-          p(new box(0.02,0.01,0.40), M.gunMetal, 0.18,-0.104,-0.28);
-          p(new box(0.055,0.025,0.025), M.gunSteel, 0.18,-0.104,-0.49);
-          muzzle.position.set(0.18,-0.185,-0.67); break;
+          p(new box(0.10,0.12,0.46), M.gunPoly, 0.18,-0.21,-0.30); // Lower frame
+          p(new box(0.09,0.09,0.38), M.gunSteel, 0.18,-0.150,-0.27); // Slide
+          p(new box(0.09,0.23,0.16), M.gunPoly,   0.16,-0.33,-0.08,-0.34); // Grip
+          p(new box(0.02,0.01,0.40), M.gunSteel, 0.18,-0.100,-0.28); // Slide detail
+          p(new cyl(0.018,0.018,0.04,12), M.gunSteel, 0.18,-0.16,-0.48, 0,0,Math.PI/2); // Barrel tip
+          muzzle.position.set(0.18,-0.16,-0.51); break;
 
         case 'mp9':
-          p(new box(0.12,0.14,0.54), M.gunMetal, 0.18,-0.21,-0.33);
-          p(new cyl(0.025,0.025,0.52,12), M.gunSteel, 0.19,-0.19,-0.86, 0,0,Math.PI/2);
-          p(new box(0.08,0.30,0.11), M.gunPoly, 0.15,-0.37,-0.19,-0.14);
-          p(new box(0.09,0.06,0.22), M.gunMetal, 0.18,-0.13,-0.62);
-          p(new box(0.035,0.22,0.16), M.gunSteel, 0.21,-0.36,-0.52, 0.26);
-          p(new box(0.035,0.16,0.14), M.gunMetal, 0.18,-0.10,-0.20);
-          p(new box(0.02,0.01,0.52), M.gunSteel, 0.19,-0.135,-0.68, 0,0,Math.PI/2);
+          p(new box(0.11,0.14,0.52), M.gunPoly, 0.18,-0.21,-0.33); // Body
+          p(new cyl(0.025,0.025,0.52,12), M.gunSteel, 0.19,-0.19,-0.86, 0,0,Math.PI/2); // Barrel + suppressor
+          p(new box(0.08,0.30,0.11), M.gunPoly, 0.15,-0.37,-0.19,-0.14); // Grip
+          p(new box(0.035,0.22,0.16), M.gunSteel, 0.21,-0.36,-0.52, 0.26); // Angled magazine
+          p(new box(0.08,0.22,0.11), M.gunPoly, 0.18,-0.28,-0.60, -0.1); // Foregrip
+          p(new box(0.09,0.06,0.40), M.gunSteel, 0.18,-0.13,-0.40); // Top rail
+          p(new box(0.05,0.05,0.10), M.optic, 0.18,-0.07,-0.30); // Small optic
           muzzle.position.set(0.19,-0.19,-1.12); break;
 
         case 'mac10':
-          p(new box(0.12,0.14,0.54), M.gunMetal, 0.18,-0.21,-0.33);
-          p(new cyl(0.038,0.038,0.42,12), M.gunSteel, 0.19,-0.185,-0.77, 0,0,Math.PI/2);
-          p(new box(0.08,0.32,0.11), M.gunTan,   0.15,-0.38,-0.12,-0.11);
-          p(new box(0.04,0.26,0.24), M.gunSteel, 0.18,-0.175,-0.98, 0,0,Math.PI/2);
-          p(new box(0.035,0.16,0.14), M.gunMetal, 0.18,-0.10,-0.20);
-          p(new box(0.02,0.01,0.52), M.gunSteel, 0.18,-0.135,-0.68, 0,0,Math.PI/2);
+          p(new box(0.11,0.18,0.44), M.gunSteel, 0.18,-0.21,-0.33); // Blocky body
+          p(new cyl(0.038,0.038,0.42,12), M.gunSteel, 0.19,-0.185,-0.77, 0,0,Math.PI/2); // Thick suppressor
+          p(new box(0.08,0.32,0.11), M.gunPoly,   0.15,-0.38,-0.12,-0.11); // Grip
+          p(new box(0.04,0.26,0.14), M.gunSteel, 0.18,-0.38,-0.14, 0); // Straight magazine
+          p(new box(0.035,0.08,0.14), M.gunMetal, 0.18,-0.10,-0.20); // Charging handle
+          p(new box(0.08,0.04,0.22), M.gunSteel, 0.18,-0.18,-0.58); // Cloth strap mount
           muzzle.position.set(0.18,-0.175,-1.14); break;
 
         case 'm4a1':
-          p(new box(0.12,0.14,0.58), M.gunMetal, 0.20,-0.21,-0.33);
-          p(new cyl(0.026,0.026,0.80,12), M.gunSteel, 0.21,-0.185,-0.96, 0,0,Math.PI/2);
-          p(new cyl(0.048,0.048,0.44,14), M.gunMetal, 0.21,-0.185,-1.36, 0,0,Math.PI/2);
-          p(new box(0.10,0.26,0.12), M.gunMetal, 0.16,-0.37,-0.24, 0.16);
-          p(new box(0.12,0.18,0.30), M.gunTan,   0.13,-0.23,-0.06);
-          p(new box(0.10,0.08,0.36), M.gunMetal, 0.20,-0.12,-0.68);
-          p(new box(0.06,0.055,0.17), M.optic,   0.20,-0.07,-0.58);
-          p(new cyl(0.018,0.018,0.12,8), M.gunSteel, 0.20,-0.07,-0.51, 0,0,Math.PI/2);
-          p(new cyl(0.018,0.018,0.12,8), M.gunSteel, 0.20,-0.07,-0.65, 0,0,Math.PI/2);
-          p(new box(0.025,0.02,0.17), M.lens,    0.20,-0.07,-0.58);
+          p(new box(0.10,0.14,0.58), M.gunMetal, 0.20,-0.21,-0.33); // Receiver
+          p(new cyl(0.026,0.026,0.80,12), M.gunSteel, 0.21,-0.185,-0.96, 0,0,Math.PI/2); // Barrel
+          p(new cyl(0.048,0.048,0.44,14), M.gunMetal, 0.21,-0.185,-1.36, 0,0,Math.PI/2); // Suppressor
+          p(new box(0.08,0.26,0.14), M.gunPoly, 0.16,-0.37,-0.24, 0.16); // Grip
+          p(new box(0.10,0.18,0.30), M.gunPoly,   0.13,-0.23,-0.06); // Stock
+          p(new box(0.08,0.10,0.46), M.gunPoly, 0.20,-0.15,-0.72); // Handguard
+          p(new box(0.05,0.28,0.12), M.gunMetal, 0.20,-0.34,-0.40, -0.1); // Magazine
+          p(new box(0.06,0.055,0.17), M.optic,   0.20,-0.07,-0.48); // Optic Base
+          p(new cyl(0.018,0.018,0.12,12), M.gunSteel, 0.20,-0.07,-0.41, 0,0,Math.PI/2); // Optic Lens
+          p(new box(0.025,0.02,0.17), M.lens,    0.20,-0.07,-0.48); // Lens reflection
           muzzle.position.set(0.21,-0.185,-1.58); break;
 
         case 'ak47':
-          p(new box(0.12,0.14,0.58), M.gunMetal, 0.20,-0.21,-0.33);
-          p(new cyl(0.026,0.026,0.72,12), M.gunSteel, 0.21,-0.185,-0.92, 0,0,Math.PI/2);
-          p(new box(0.10,0.26,0.14), M.gunWood, 0.16,-0.38,-0.24, 0.27,0,-0.06);
-          p(new box(0.13,0.17,0.32), M.gunWood, 0.12,-0.22,-0.07);
-          p(new box(0.11,0.08,0.32), M.gunWood, 0.20,-0.13,-0.70);
-          p(new box(0.04,0.04,0.20), M.gunSteel, 0.21,-0.185,-1.25);
-          p(new box(0.055,0.02,0.015), M.gunSteel, 0.21,-0.185,-0.32);
-          p(new cyl(0.016,0.016,0.10,8), M.gunSteel, 0.21,-0.185,-0.87, Math.PI/2,0,0);
+          p(new box(0.10,0.14,0.58), M.gunMetal, 0.20,-0.21,-0.33); // Receiver
+          p(new cyl(0.022,0.022,0.72,12), M.gunSteel, 0.21,-0.185,-0.92, 0,0,Math.PI/2); // Barrel
+          p(new cyl(0.012,0.012,0.68,8), M.gunSteel, 0.21,-0.14,-0.88, 0,0,Math.PI/2); // Gas tube
+          p(new box(0.08,0.26,0.12), M.gunWood, 0.16,-0.38,-0.24, 0.27,0,-0.06); // Grip
+          p(new box(0.10,0.17,0.36), M.gunWood, 0.12,-0.22,-0.05); // Stock
+          p(new box(0.09,0.10,0.32), M.gunWood, 0.21,-0.16,-0.70); // Handguard
+          p(new box(0.05,0.30,0.13), M.gunSteel, 0.20,-0.38,-0.46, -0.25); // Curved Magazine
+          p(new box(0.05,0.08,0.13), M.gunSteel, 0.20,-0.46,-0.48, -0.45); // Mag curve tip
+          p(new cyl(0.016,0.016,0.10,8), M.gunSteel, 0.21,-0.185,-0.87, Math.PI/2,0,0); // Sight block
           muzzle.position.set(0.21,-0.185,-1.36); break;
 
         case 'awp':
-          p(new box(0.15,0.15,0.74), M.gunMetal, 0.21,-0.21,-0.30);
-          p(new cyl(0.028,0.028,1.14,12), M.gunSteel, 0.22,-0.165,-1.10, 0,0,Math.PI/2);
-          p(new cyl(0.052,0.052,0.58,16), M.optic, 0.19,-0.04,-0.61, 0,0,Math.PI/2);
-          p(new cyl(0.018,0.018,0.60,8), M.optic, 0.19,-0.04,-0.61, 0,0,Math.PI/2);
-          p(new box(0.024,0.02,0.58), M.lens,    0.19,-0.04,-0.61);
-          p(new box(0.11,0.20,0.17), M.gunPoly, 0.18,-0.35,-0.30);
-          p(new box(0.17,0.17,0.42), M.gunTan,  0.09,-0.23, 0.02);
-          p(new box(0.12,0.08,0.43), M.gunMetal, 0.21,-0.13,-0.74);
-          p(new cyl(0.016,0.016,0.10,8), M.gunSteel, 0.22,-0.165,-0.60, Math.PI/2,0,0);
-          muzzle.position.set(0.22,-0.165,-1.68); break;
+          p(new box(0.12,0.15,0.84), M.gunPoly, 0.21,-0.21,-0.30); // Main chassis
+          p(new cyl(0.028,0.028,1.24,12), M.gunSteel, 0.22,-0.165,-1.10, 0,0,Math.PI/2); // Heavy barrel
+          p(new cyl(0.038,0.038,0.14,12), M.gunSteel, 0.22,-0.165,-1.76, 0,0,Math.PI/2); // Muzzle brake
+          p(new cyl(0.048,0.048,0.64,16), M.optic, 0.19,-0.04,-0.54, 0,0,Math.PI/2); // Scope tube
+          p(new cyl(0.056,0.056,0.08,16), M.optic, 0.19,-0.04,-0.84, 0,0,Math.PI/2); // Scope front bell
+          p(new box(0.024,0.02,0.64), M.lens,    0.19,-0.04,-0.54); // Lens reflection
+          p(new box(0.09,0.22,0.14), M.gunPoly, 0.18,-0.38,-0.26, 0.1); // Grip
+          p(new box(0.14,0.17,0.48), M.gunPoly,  0.09,-0.23, 0.02); // Stock
+          p(new box(0.10,0.08,0.52), M.gunPoly, 0.21,-0.13,-0.74); // Forend
+          p(new box(0.06,0.16,0.14), M.gunSteel, 0.21,-0.30,-0.42); // Mag
+          muzzle.position.set(0.22,-0.165,-1.84); break;
 
         default:
-          p(new box(0.11,0.12,0.48), M.gunMetal, 0.18,-0.21,-0.32);
+          p(new box(0.10,0.12,0.48), M.gunMetal, 0.18,-0.21,-0.32);
           muzzle.position.set(0.18,-0.19,-0.90);
       }
       shadowify(g);
