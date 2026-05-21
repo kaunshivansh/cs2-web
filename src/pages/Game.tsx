@@ -533,97 +533,30 @@ export default function Game() {
     siteMarker('A',A_SITE.x,A_SITE.z,'#dc8a66');
     siteMarker('B',B_SITE.x,B_SITE.z,'#dc8a66');
 
-    // LOAD CITY MAP (With persistent browser caching)
-    const CACHE_NAME = 'cs2-web-assets-v2';
+    // LOAD CITY MAP
     const MAP_URL = '/assets/models/city.glb';
-
     async function processCityModel(city: THREE.Group) {
-      if (!city) {
-        console.error("City model is null");
-        setMapLoaded(true); mapLoadedRef.current = true;
-        return;
-      }
+      if (!city) return;
       prepLoadedMapAsset(city);
-      
       const b3 = new THREE.Box3().setFromObject(city);
       const size = b3.getSize(new THREE.Vector3());
-      console.log(`Original city size: ${size.x.toFixed(2)}x${size.y.toFixed(2)}x${size.z.toFixed(2)}`);
-      
-      const scale = 140 / (Math.max(size.x, size.z) || 1);
-      city.scale.setScalar(scale);
-      
-      b3.setFromObject(city);
-      const center = b3.getCenter(new THREE.Vector3());
-      city.position.x -= center.x;
-      city.position.z -= center.z;
-      city.position.y -= b3.min.y;
+      city.scale.setScalar(140 / (Math.max(size.x, size.z) || 1));
+      b3.setFromObject(city); const center = b3.getCenter(new THREE.Vector3());
+      city.position.x -= center.x; city.position.z -= center.z; city.position.y -= b3.min.y;
       scene.add(city);
-
       const meshes: THREE.Mesh[] = [];
       city.traverse(o => { if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh); });
-      console.log(`Analyzing ${meshes.length} meshes for colliders...`);
-      
       for (let i = 0; i < meshes.length; i++) {
-        const mesh = meshes[i];
-        const box = new THREE.Box3().setFromObject(mesh);
-        const mSize = box.getSize(new THREE.Vector3());
+        const mesh = meshes[i]; const box = new THREE.Box3().setFromObject(mesh); const mSize = box.getSize(new THREE.Vector3());
         if (mSize.y > 0.4 && mSize.x > 0.05 && mSize.z > 0.05) {
           colliders.push({ min: box.min.clone(), max: box.max.clone() });
-          minimapWalls.push({ 
-            x: (box.min.x + box.max.x)/2, 
-            z: (box.min.z + box.max.z)/2, 
-            w: mSize.x, 
-            d: mSize.z 
-          });
+          minimapWalls.push({ x:(box.min.x+box.max.x)/2, z:(box.min.z+box.max.z)/2, w:mSize.x, d:mSize.z });
         }
-        if (i % 80 === 0) {
-          setLoadingProgress(Math.min(99, 10 + Math.round((i / Math.max(1, meshes.length)) * 90)));
-          await new Promise(r => setTimeout(r, 0));
-        }
+        if (i % 100 === 0) { setLoadingProgress(10 + Math.round((i/meshes.length)*90)); await new Promise(r=>setTimeout(r,0)); }
       }
-
-      console.log(`Map ready. Colliders: ${colliders.length}.`);
-      setLoadingProgress(100);
-      setMapLoaded(true);
-      mapLoadedRef.current = true;
+      setLoadingProgress(100); setMapLoaded(true); mapLoadedRef.current = true;
     }
-
-    async function fetchAndCacheMap() {
-      setLoadingProgress(1);
-      try {
-        const cache = await caches.open(CACHE_NAME);
-        let response = await cache.match(MAP_URL);
-        
-        if (!response || !response.ok) {
-          console.log("Map not in cache, fetching 7.8MB model...");
-          response = await fetch(MAP_URL);
-          if (response.ok) await cache.put(MAP_URL, response.clone());
-        } else {
-          console.log("Loading map from local browser cache.");
-        }
-
-        if (!response.ok) throw new Error("Fetch failed");
-
-        const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
-        
-        gltfLoader.load(url, async (gltf) => {
-          await processCityModel(gltf.scene);
-          setTimeout(() => URL.revokeObjectURL(url), 5000);
-        }, undefined, (err) => {
-           console.error("Blob load error, fallback to direct:", err);
-           gltfLoader.load(MAP_URL, (gltf) => processCityModel(gltf.scene));
-        });
-      } catch (err) {
-        console.error("Cache path failed, trying direct load:", err);
-        gltfLoader.load(MAP_URL, (gltf) => processCityModel(gltf.scene), undefined, () => {
-           console.error("Everything failed. Booting emergency world.");
-           setMapLoaded(true); mapLoadedRef.current = true;
-        });
-      }
-    }
-
-    fetchAndCacheMap();
+    gltfLoader.load(MAP_URL, (gltf) => processCityModel(gltf.scene), (p)=>{ if(p.total)setLoadingProgress(Math.round((p.loaded/p.total)*10)); }, (e)=>{ console.error(e); });
 
     // ─── WEAPONS ────────────────────────────────────────────────────────────────
     // Using WEAPONS from WeaponData.ts
@@ -812,101 +745,74 @@ export default function Game() {
         currentAction: null 
       };
 
-      // INVISIBLE HITBOXES (For physics and shooting logic)
+      // AUTH HITBOXES
       const hitBoxMat = new THREE.MeshBasicMaterial({ visible: false });
       const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.32,0.62,5,12), hitBoxMat); 
-      torso.position.y=1.0; 
-      g.add(torso);
-      res.body = torso;
-      
-      const headGroup = new THREE.Group(); 
-      headGroup.position.set(0,1.60,0.05); 
-      g.add(headGroup);
-      res.head = headGroup;
+      torso.position.y=1.0; g.add(torso); res.body = torso;
+      const headGroup = new THREE.Group(); headGroup.position.set(0,1.60,0.05); g.add(headGroup); res.head = headGroup;
       const faceHitbox = new THREE.Mesh(new THREE.SphereGeometry(0.18,12,12), hitBoxMat); 
-      faceHitbox.position.set(0,0.08,0); 
-      headGroup.add(faceHitbox);
+      faceHitbox.position.set(0,0.08,0); headGroup.add(faceHitbox);
 
-      // WEAPON MOUNT
-      const weaponMount = new THREE.Group(); 
-      weaponMount.position.set(0.18,0.98,0.28); 
-      g.add(weaponMount);
+      // MOUNT
+      const weaponMount = new THREE.Group(); weaponMount.position.set(0.18,0.98,0.28); g.add(weaponMount);
       res.weaponMount = weaponMount;
-
       const worldWeapon = createWeaponModel(weaponId,'world', team as Team);
       worldWeapon.group.rotation.set(0,-Math.PI/2,Math.PI/2);
-      worldWeapon.group.position.set(0,0.02,0.2); 
-      worldWeapon.group.scale.multiplyScalar(0.88);
+      worldWeapon.group.position.set(0,0.02,0.2); worldWeapon.group.scale.multiplyScalar(0.88);
       weaponMount.add(worldWeapon.group);
 
+      // INITIAL VISUALS (While external models load)
+      const fallback = new THREE.Group();
+      const pal = getTeamVisualPalette(team as Team);
+      addMesh(fallback, new THREE.CapsuleGeometry(0.3,0.6,4,8), new THREE.MeshStandardMaterial({color:pal.uniformColor}), 0,1,0);
+      addMesh(fallback, new THREE.SphereGeometry(0.18,10,10), new THREE.MeshStandardMaterial({color:pal.skinColor}), 0,1.68,0.05);
+      g.add(fallback);
+
       const modelName = isCT ? 'sas__cs2_agent_model_blue' : 'elf_female_soldier';
-      
-      const setupInstancedModel = (cached: { scene: THREE.Group, animations: THREE.AnimationClip[] }) => {
-        const model = SkeletonUtils.clone(cached.scene);
-        
-        // Robust Hand Bone Detection
+      const setupInstance = (data: any) => {
+        if (!data) return;
+        fallback.visible = false;
+        const model = SkeletonUtils.clone(data.scene);
         let hand: THREE.Object3D | null = null;
-        model.traverse(obj => {
-          const n = obj.name.toLowerCase();
-          if (!hand && (n.includes('righthand') || n.includes('hand_r') || n.includes('hand.r') || n.includes('r_hand'))) {
-            hand = obj;
-          }
+        model.traverse(o => {
+          const n = o.name.toLowerCase();
+          if (!hand && (n.includes('righthand')||n.includes('hand_r')||n.includes('r_hand'))) hand = o;
         });
-        
         if (hand) {
           (hand as THREE.Object3D).add(weaponMount);
           weaponMount.position.set(0, 0, 0); 
           weaponMount.rotation.set(Math.PI/2, 0, -Math.PI/2);
           weaponMount.scale.setScalar(2.2); 
         }
-
         model.rotation.y = Math.PI; 
-
-        if (cached.animations.length > 0) {
-          const mixer = new THREE.AnimationMixer(model);
-          res.mixer = mixer;
-          const idleClip = cached.animations.find(a => a.name.toLowerCase().includes('idle')) || cached.animations[0];
-          const runClip = cached.animations.find(a => a.name.toLowerCase().includes('run') || a.name.toLowerCase().includes('walk')) || idleClip;
-          res.actions.idle = mixer.clipAction(idleClip);
-          res.actions.run = mixer.clipAction(runClip);
-          res.currentAction = res.actions.idle;
-          res.currentAction.play();
+        if (data.animations.length > 0) {
+          const m = new THREE.AnimationMixer(model); res.mixer = m;
+          const iC = data.animations.find((a:any)=>a.name.toLowerCase().includes('idle'))||data.animations[0];
+          const rC = data.animations.find((a:any)=>a.name.toLowerCase().includes('run')||a.name.toLowerCase().includes('walk'))||iC;
+          res.actions.idle = m.clipAction(iC); res.actions.run = m.clipAction(rC);
+          res.currentAction = res.actions.idle; res.currentAction.play();
         }
-
-        const box = new THREE.Box3().setFromObject(model);
-        const size = box.getSize(new THREE.Vector3());
-        model.scale.setScalar(1.82 / size.y);
-        box.setFromObject(model);
-        model.position.y = -box.min.y;
+        const b3 = new THREE.Box3().setFromObject(model); const sz = b3.getSize(new THREE.Vector3());
+        model.scale.setScalar(1.82 / (sz.y || 1));
+        b3.setFromObject(model); model.position.y = -b3.min.y;
         g.add(model);
       };
 
       const cached = characterCache.get(modelName);
-      if (cached) {
-        setupInstancedModel(cached);
-      } else {
+      if (cached) setupInstance(cached);
+      else {
         if (!loadingPromises.has(modelName)) {
-          const p = new Promise((resolve) => {
+          const p = new Promise(resolve => {
             gltfLoader.load(`/assets/models/${modelName}.glb`, (gltf) => {
-              const root = gltf.scene;
-              root.traverse((child) => {
-                if ((child as THREE.Mesh).isMesh) {
-                  child.castShadow = true;
-                  child.receiveShadow = true;
-                  const mat = (child as THREE.Mesh).material as THREE.MeshStandardMaterial;
-                  if (mat.map) mat.map.colorSpace = THREE.SRGBColorSpace;
-                }
-              });
-              const data = { scene: root, animations: gltf.animations };
-              characterCache.set(modelName, data);
-              resolve(data);
-            });
+              gltf.scene.traverse(c => { if((c as THREE.Mesh).isMesh) { c.castShadow=c.receiveShadow=true; const m=(c as THREE.Mesh).material as any; if(m.map)m.map.colorSpace=THREE.SRGBColorSpace; } });
+              const d = { scene: gltf.scene, animations: gltf.animations };
+              characterCache.set(modelName, d); resolve(d);
+            }, undefined, () => resolve(null));
           });
           loadingPromises.set(modelName, p);
         }
-        loadingPromises.get(modelName)!.then(setupInstancedModel);
+        loadingPromises.get(modelName)!.then(setupInstance);
       }
-
       return res;
     }
 
@@ -1060,6 +966,7 @@ export default function Game() {
 
     function configureBots(){
       if (!mapLoadedRef.current) {
+        console.log("[BOTS] Map not ready, retrying in 500ms...");
         scheduleTimeout(configureBots, 500);
         return;
       }
@@ -1082,9 +989,7 @@ export default function Game() {
         neededT = team === 'T' ? 4 : 5;
       }
 
-      console.log(`Spawning bots: ${neededCT} CT, ${neededT} T (Player is ${playerTeamRef.current})`);
-
-      if (neededCT === 0 && neededT === 0) return;
+      console.log(`[BOTS] Spawning ${neededCT} CT and ${neededT} T. Player is ${playerTeamRef.current}. Total expected: 10`);
 
       const ctSpawns = [vec(16,0,30),vec(20,0,28),vec(24,0,30),vec(28,0,28),vec(14,0,30)];
       const tSpawnsA = [vec(-30,0,-36),vec(-24,0,-36),vec(-18,0,-34),vec(-10,0,-34),vec(-12,0,-34)];
@@ -2363,7 +2268,6 @@ export default function Game() {
     function updateRound(dt:number){
       if(!state.started||state.matchOver)return;
       
-      // Delay elimination check for first 2 seconds of round to prevent instant-win race conditions
       if (state.phase === 'live' || state.phase === 'freeze' || state.phase === 'planted') {
          const tAliveCount = (player.alive && player.team === 'T' ? 1 : 0) + 
                              bots.filter(b => b.alive && b.team === 'T').length + 
@@ -2373,18 +2277,21 @@ export default function Game() {
                               bots.filter(b => b.alive && b.team === 'CT').length + 
                               Array.from(remotePlayers.values()).filter(r => r.hp > 0 && r.team === 'CT').length;
 
-         if (state.phase !== 'planted' && state.phaseT < 114) { // Only check if round has been live for > 1s
-             if (tAliveCount === 0 && ctAliveCount === 0) {
-                endRound('CT', 'Draw');
-             } else if (tAliveCount === 0) {
-                endRound('CT', 'Terrorists eliminated');
-             } else if (ctAliveCount === 0) {
-                endRound('T', 'Counter-Terrorists eliminated');
-             }
-         } else if (state.phase === 'planted') {
-             if (ctAliveCount === 0) {
-                 endRound('T', 'Counter-Terrorists eliminated');
-             }
+         // Determine if match is actually ready to check for wins
+         let expectedTotal = 10;
+         if (isMultiplayerRef.current) {
+            const rs = roomManager.getState();
+            expectedTotal = rs.players.length + bots.length;
+         }
+         
+         const matchReady = isMultiplayerRef.current ? true : (bots.length >= 8); // 9 total including player
+
+         if (matchReady && state.phase !== 'planted' && state.phaseT < 114) { 
+             if (tAliveCount === 0 && ctAliveCount === 0) endRound('CT', 'Draw');
+             else if (tAliveCount === 0) endRound('CT', 'Terrorists eliminated');
+             else if (ctAliveCount === 0) endRound('T', 'Counter-Terrorists eliminated');
+         } else if (state.phase === 'planted' && ctAliveCount === 0) {
+             endRound('T', 'Counter-Terrorists eliminated');
          }
       }
 
