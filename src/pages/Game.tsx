@@ -244,7 +244,7 @@ export default function Game() {
     let activeViewWeaponId = '';
     let activeViewTeam: Team = 'CT';
 
-    const remotePlayers = new Map<string, { obj: THREE.Group, body: THREE.Mesh, head: THREE.Object3D, weaponMount: THREE.Group, targetPos: THREE.Vector3, targetYaw: number, targetPitch: number, team: string, name: string, hp: number, weapon: string, mixer: THREE.AnimationMixer | null }>();
+    const remotePlayers = new Map<string, { obj: THREE.Group, body: THREE.Mesh, head: THREE.Object3D, weaponMount: THREE.Group, targetPos: THREE.Vector3, targetYaw: number, targetPitch: number, team: string, name: string, hp: number, weapon: string, mixer: THREE.AnimationMixer | null, actions: { idle: any, run: any }, currentAction: any }>();
 
     roomManager.onNetworkEvent((event) => {
       if (event.type === 'PLAYER_UPDATE') {
@@ -258,6 +258,8 @@ export default function Game() {
           const newRemote = { 
             obj: model.group, body: model.body, head: model.head, weaponMount: model.weaponMount,
             mixer: (model as any).mixer as THREE.AnimationMixer | null,
+            actions: (model as any).actions,
+            currentAction: (model as any).currentAction,
             targetPos: new THREE.Vector3(data.pos.x, data.pos.y - 1.55, data.pos.z),
             targetYaw: data.yaw, targetPitch: data.pitch,
             team: data.team, name: data.name, hp: data.hp, weapon: data.weapon
@@ -310,6 +312,7 @@ export default function Game() {
     function updateRemotePlayers(dt: number) {
       remotePlayers.forEach((remote) => {
         // Linear interpolation for smooth movement
+        const spd = remote.obj.position.distanceTo(remote.targetPos);
         remote.obj.position.lerp(remote.targetPos, 0.15);
         
         // Simple angle lerp
@@ -320,6 +323,7 @@ export default function Game() {
         remote.head.rotation.x += pitchDiff * 0.2;
 
         if (remote.mixer) remote.mixer.update(dt);
+        syncAnimation(remote, spd / dt);
       });
     }
 
@@ -742,7 +746,11 @@ export default function Game() {
     function createBotModel(team:string, weaponId:string){
       const isCT = team==='CT';
       const g = new THREE.Group();
-      const res: any = { group: g, body: null, head: null, weaponMount: null, mixer: null };
+      const res: any = { 
+        group: g, body: null, head: null, weaponMount: null, 
+        mixer: null, actions: { idle: null, run: null }, 
+        currentAction: null 
+      };
 
       // INVISIBLE HITBOXES (For physics and shooting logic)
       const hitBoxMat = new THREE.MeshBasicMaterial({ visible: false });
@@ -759,7 +767,7 @@ export default function Game() {
       faceHitbox.position.set(0,0.08,0); 
       headGroup.add(faceHitbox);
 
-      // WEAPON MOUNT (Initially static, will be parented to bone once loaded)
+      // WEAPON MOUNT (Initially static, parented to bone later)
       const weaponMount = new THREE.Group(); 
       weaponMount.position.set(0.18,0.98,0.28); 
       g.add(weaponMount);
@@ -776,7 +784,6 @@ export default function Game() {
       gltfLoader.load(`/assets/models/${modelName}.glb`, (gltf) => {
         const model = gltf.scene;
         
-        // Ensure standard shadows
         model.traverse((child) => {
           if ((child as THREE.Mesh).isMesh) {
             child.castShadow = true;
@@ -788,47 +795,51 @@ export default function Game() {
           }
         });
 
-        // Bone-parenting for weapons ("Rigging")
-        // Search for common hand bone names in rigged models
-        const hand = model.getObjectByName('mixamorig_RightHand') || 
-                     model.getObjectByName('Hand_R') || 
-                     model.getObjectByName('RightHand') ||
-                     model.getObjectByName('Bip01_R_Hand');
+        // Robust Hand Bone Detection
+        let hand: THREE.Object3D | null = null;
+        model.traverse(obj => {
+          const n = obj.name.toLowerCase();
+          if (!hand && (n.includes('righthand') || n.includes('hand_r') || n.includes('hand.r') || n.includes('r_hand'))) {
+            hand = obj;
+          }
+        });
         
         if (hand) {
-          hand.add(weaponMount);
-          // Reset relative position to hand bone (tweakable based on specific model)
+          (hand as THREE.Object3D).add(weaponMount);
           weaponMount.position.set(0, 0, 0); 
           weaponMount.rotation.set(Math.PI/2, 0, -Math.PI/2);
-          weaponMount.scale.setScalar(2.2); // Adjust scale back to world space since bone might be scaled
+          weaponMount.scale.setScalar(2.2); 
         }
 
-        // Animation System
+        // Standardized Orientation: Face forward (-Z)
+        // Most Mixamo/CS2 models face +Z in T-pose. We rotate the scene wrapper.
+        model.rotation.y = Math.PI; 
+
+        // Advanced Animation System
         if (gltf.animations && gltf.animations.length > 0) {
           const mixer = new THREE.AnimationMixer(model);
           res.mixer = mixer;
-          // Look for 'Idle' or 'Walking' animations
-          const idleAnim = gltf.animations.find(a => a.name.toLowerCase().includes('idle')) || gltf.animations[0];
-          if (idleAnim) {
-            const action = mixer.clipAction(idleAnim);
-            action.play();
-          }
+          
+          const idleClip = gltf.animations.find(a => a.name.toLowerCase().includes('idle')) || gltf.animations[0];
+          const runClip = gltf.animations.find(a => a.name.toLowerCase().includes('run') || a.name.toLowerCase().includes('walk')) || idleClip;
+          
+          res.actions.idle = mixer.clipAction(idleClip);
+          res.actions.run = mixer.clipAction(runClip);
+          
+          res.currentAction = res.actions.idle;
+          res.currentAction.play();
         }
 
-        // Scale and Center
+        // Scale
         const box = new THREE.Box3().setFromObject(model);
         const size = box.getSize(new THREE.Vector3());
         const targetHeight = 1.82;
         const scale = targetHeight / size.y;
         model.scale.setScalar(scale);
 
+        // Grounding
         box.setFromObject(model);
-        const center = box.getCenter(new THREE.Vector3());
-        model.position.x = -center.x;
-        model.position.z = -center.z;
         model.position.y = -box.min.y;
-
-        if (isCT) model.rotation.y = Math.PI; 
 
         g.add(model);
       });
@@ -2522,6 +2533,19 @@ export default function Game() {
     const onResize=()=>{camera.aspect=dom.game.clientWidth/dom.game.clientHeight;camera.updateProjectionMatrix();renderer.setSize(dom.game.clientWidth,dom.game.clientHeight);};
     addEventListener('resize',onResize);
 
+    function syncAnimation(entity: any, speed: number) {
+      if (!entity.mixer || !entity.actions.idle || !entity.actions.run) return;
+      const isMoving = speed > 0.15;
+      const target = isMoving ? entity.actions.run : entity.actions.idle;
+      
+      if (entity.currentAction !== target) {
+        const prev = entity.currentAction;
+        entity.currentAction = target;
+        target.reset().fadeIn(0.2).play();
+        if (prev) prev.fadeOut(0.2);
+      }
+    }
+
     let last=performance.now(),animId=0,lastBroadcast=0,lastPlayerBroadcast=0;
     function tick(){
       try {
@@ -2535,9 +2559,12 @@ export default function Game() {
           }
           updatePlayer(dt);
           if (player.mixer) player.mixer.update(dt);
+          syncAnimation(player, hspd(player.vel));
+
           for(const b of bots){
             updateBot(b,dt);
             if (b.mixer) b.mixer.update(dt);
+            syncAnimation(b, hspd(b.obj.position.clone().sub(b.navLastPos || b.obj.position)));
           }
           updateDroppedWeapons(dt);
           updateHUD();
