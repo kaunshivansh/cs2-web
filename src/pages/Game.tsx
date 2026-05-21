@@ -268,6 +268,37 @@ export default function Game() {
         remote.targetPitch = data.pitch;
         remote.hp = data.hp;
         remote.weapon = data.weapon;
+        
+        if (remote.hp <= 0 && remote.obj.visible) remote.obj.visible = false;
+        else if (remote.hp > 0 && !remote.obj.visible) remote.obj.visible = true;
+      } else if (event.type === 'DAMAGE') {
+        const myId = roomManager.getMyId() || '';
+        if (event.targetId === myId) {
+          // I was hit
+          player.hp -= event.damage;
+          showDamage();
+          if (player.hp <= 0 && player.alive) {
+            player.alive = false;
+            player.deaths++;
+            
+            const killer = event.killerId === myId ? { name: playerNameRef.current, team: player.team } 
+              : remotePlayers.get(event.killerId) || { name: 'Unknown', team: 'CT' };
+            addKillfeed(killer, player, event.weapon);
+          }
+        } else {
+          // Someone else was hit
+          const remote = remotePlayers.get(event.targetId);
+          if (remote) {
+            remote.hp -= event.damage;
+            spawnBlood(remote.obj.position.clone().add(new THREE.Vector3(0, 1.2, 0)));
+            if (remote.hp <= 0 && remote.obj.visible) {
+               remote.obj.visible = false;
+               const killer = event.killerId === myId ? { name: playerNameRef.current, team: player.team } 
+                 : remotePlayers.get(event.killerId) || { name: 'Unknown', team: 'CT' };
+               addKillfeed(killer, remote, event.weapon);
+            }
+          }
+        }
       }
     });
 
@@ -1125,6 +1156,16 @@ export default function Game() {
         const ph=raycaster.ray.intersectBox(pb,new THREE.Vector3());
         if(ph){const d=origin.distanceTo(ph);const isH=ph.y>player.pos.y-0.12;if(!best||d<best.dist)best={dist:d,isPlayer:true,part:isH?'head':'body',point:ph};}
       }
+      
+      // Multiplayer remote players hit detection
+      for(const [id, remote] of remotePlayers.entries()) {
+         if (remote.hp <= 0 || remote.team === shooterTeam) continue;
+         const hh=raycaster.intersectObject(remote.head,false)[0];
+         const bh=raycaster.intersectObject(remote.body,false)[0];
+         const hit=hh&&(!bh||hh.distance<bh.distance)?{dist:hh.distance,remoteId: id, remote, part:'head',point:hh.point}:bh?{dist:bh.distance,remoteId: id, remote, part:'body',point:bh.point}:null;
+         if(hit&&(!best||hit.dist<best.dist))best=hit;
+      }
+
       for(const c of colliders){
         const bh=raycaster.ray.intersectBox(tempBox.set(c.min,c.max),new THREE.Vector3());
         if(bh){const d=origin.distanceTo(bh);if(!best||d<best.dist)best={dist:d,isWall:true,point:bh};}
@@ -1352,6 +1393,19 @@ export default function Game() {
       if(hit){
         spawnTracer(camera.position,hit.point,w.scoped?0xffe8aa:0xfff0a0);
         if(hit.bot){const isHS=hit.part==='head';damageBot(hit.bot,weaponDamage(w,hit.part,hit.dist,player.scoped),w,'player',hit.part);spawnBlood(hit.point);showHitmark(isHS);playHitSound(isHS);}
+        else if(hit.remoteId) {
+          const dmg = applyArmor(hit.remote, weaponDamage(w,hit.part,hit.dist,player.scoped), w, hit.part);
+          const isHS = hit.part==='head';
+          showHitmark(isHS); playHitSound(isHS); spawnBlood(hit.point);
+          roomManager.sendUpdate({
+            type: 'DAMAGE',
+            targetId: hit.remoteId,
+            damage: dmg,
+            killerId: roomManager.getMyId(),
+            weapon: player.weapon,
+            part: hit.part
+          });
+        }
         else if(hit.isWall)spawnImpact(hit.point);
       } else spawnTracer(camera.position,camera.position.clone().add(dir.multiplyScalar(w.range)));
       updateHUD();return true;
