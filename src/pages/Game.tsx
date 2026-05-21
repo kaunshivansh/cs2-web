@@ -548,33 +548,74 @@ export default function Game() {
     }
 
     const roadTiles: Array<[string, number, number, number?]> = [
+      // Spawns & Mains
       ['road-straight', -24, -36, Math.PI / 2],
       ['road-straight',  -8, -28, Math.PI / 2],
       ['road-crossroad-line', 4, -10, 0],
       ['road-straight',   4,   8, 0],
       ['road-straight',  20,  24, Math.PI / 2],
+      
+      // A Site & Connector
       ['road-bend-sidewalk', -26, -10, Math.PI],
+      ['road-curve', -40, -22, Math.PI / 2],
+      ['road-curve-intersection', -14, -14, -Math.PI / 2],
+      ['road-straight-half', -30, -22, Math.PI / 2],
+      
+      // B Site & Long
       ['road-side-entry', 24, -18, -Math.PI / 2],
       ['road-bridge', 32, -6, 0],
-      ['road-curve', -40, -22, Math.PI / 2],
       ['road-curve-intersection', 20, -28, 0],
       ['road-split', 10, -24, Math.PI / 2],
+      ['road-straight', 32, -22, 0],
+      ['road-end-round', 32, -34, 0],
+      
+      // Additional Dressing (Using tiles as flat ground bases)
+      ['road-square', -30, -10, 0], // A Site pad
+      ['road-square', 30, -18, 0],  // B Site pad
     ];
     roadTiles.forEach(([name, x, z, rot = 0]) => placeMapAsset(name, x, z, rot, 10, 0.024));
 
     const kitProps: Array<[string, number, number, number?, number?]> = [
+      // --- T SPAWN & MID CONNECTOR ---
       ['construction-barrier', -14, -24, Math.PI / 2, 8.8],
-      ['construction-barrier',  16, -30, 0, 8.8],
-      ['construction-barrier',  16,  16, 0, 8.8],
-      ['construction-cone', -5, -2, 0, 8.8],
-      ['construction-cone',  2, 14, 0, 8.8],
-      ['construction-cone', 20, 20, 0, 8.8],
-      ['sign-highway-detailed', 10, 26, 0, 9.8],
-      ['light-square-double',  4, -10, 0, 10.5],
+      ['construction-barrier', -14, -30, Math.PI / 2, 8.8],
+      ['bridge-pillar-wide', -14, -36, 0, 10.5],
+      ['light-curved-double', -20, -38, 0, 10.5],
+      
+      // --- MID ---
+      ['bridge-pillar-wide', 4, -22, Math.PI / 2, 10.5],
+      ['bridge-pillar-wide', -4, -14, Math.PI / 2, 10.5],
+      ['construction-barrier', 12, -18, -Math.PI / 4, 8.8],
+      ['sign-highway-detailed', 4, 0, 0, 9.8],
+      ['light-square-cross', 4, -10, 0, 10.5],
+      
+      // --- A SITE ---
+      ['bridge-pillar-wide', -22, -10, 0, 10.5],
+      ['bridge-pillar-wide', -38, -10, 0, 10.5],
+      ['construction-barrier', -30, -6, 0, 8.8],
+      ['construction-barrier', -30, -14, 0, 8.8],
+      ['road-slant-barrier', -34, -10, Math.PI / 2, 10.5],
       ['light-square', -30, -2, 0, 10.5],
-      ['light-curved-double', 34, -2, -Math.PI / 2, 10.5],
+      ['construction-cone', -26, -12, 0, 8.8],
+      ['construction-cone', -34, -8, 0, 8.8],
+      
+      // --- B SITE ---
       ['bridge-pillar-wide', 30, -6, 0, 10.5],
       ['bridge-pillar-wide', 38, -6, 0, 10.5],
+      ['road-slant-barrier', 26, -18, Math.PI / 2, 10.5],
+      ['construction-barrier', 34, -18, Math.PI / 2, 8.8],
+      ['construction-barrier', 34, -22, Math.PI / 2, 8.8],
+      ['light-curved-double', 34, -2, -Math.PI / 2, 10.5],
+      ['construction-cone', 28, -20, 0, 8.8],
+      ['sign-highway-wide', 30, -28, Math.PI, 10.5],
+
+      // --- CT SPAWN & ROTATION ---
+      ['bridge-pillar-wide', 16, 16, 0, 10.5],
+      ['construction-barrier', 16, 22, 0, 8.8],
+      ['construction-barrier', 24, 16, Math.PI / 2, 8.8],
+      ['sign-highway-detailed', 10, 26, 0, 9.8],
+      ['light-curved-double', 24, 30, 0, 10.5],
+      ['construction-cone', 20, 20, 0, 8.8],
     ];
     kitProps.forEach(([name, x, z, rot = 0, scale = 10]) => placeMapAsset(name, x, z, rot, scale, 0.04, true));
 
