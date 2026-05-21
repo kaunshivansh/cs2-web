@@ -658,7 +658,7 @@ export default function Game() {
     };
     const state: any = {
       started:false, round:1, ctScore:0, tScore:0, maxRounds:15,
-      phase:'freeze', phaseT:0, bomb:null, buyOpen:false, defusingT:0, attackSite:'A', matchOver:false,
+      phase:'freeze', phaseT:0, frozenRoundTime:0, bomb:null, buyOpen:false, defusingT:0, attackSite:'A', matchOver:false,
       ctLossStreak:0, tLossStreak:0, roundHistory:[] as {winner:string}[],
       specTarget:null as any, specIdx:0, scoreboardOpen:false,
     };
@@ -940,6 +940,7 @@ export default function Game() {
       const model=createBotModel(team,weaponId);
       model.group.position.copy(pos); scene.add(model.group);
       return {
+        id: 'bot-' + Math.random().toString(36).substr(2, 9),
         obj:model.group, body:model.body, head:model.head, weaponMount:model.weaponMount,
         team, name, role, hp:100, armor:weaponId==='glock'?0:100, helmet:weaponId!=='glock',
         alive:true, weapon:weaponId, ammoMag:WEAPONS[weaponId].magSize, reloadT:0,
@@ -1066,30 +1067,47 @@ export default function Game() {
     ];
 
     function configureBots(){
-      if (isMultiplayerRef.current) return;
-      const playerOnCT = player.team === 'CT';
-      const ctSpawns = playerOnCT
-        ? [vec(16,0,30),vec(20,0,28),vec(24,0,30),vec(28,0,28)]
-        : [vec(14,0,30),vec(18,0,28),vec(22,0,30),vec(26,0,28),vec(30,0,26)];
-      const tSpawnsA = player.team === 'T'
-        ? [vec(-30,0,-36),vec(-24,0,-36),vec(-18,0,-34),vec(-10,0,-34)]
-        : [vec(-30,0,-36),vec(-24,0,-36),vec(-18,0,-34),vec(-12,0,-34),vec(-8,0,-36)];
-      const tSpawnsB = player.team === 'T'
-        ? [vec(-28,0,-36),vec(-20,0,-36),vec(-14,0,-34),vec(-8,0,-34)]
-        : [vec(-28,0,-36),vec(-22,0,-36),vec(-16,0,-34),vec(-10,0,-34),vec(-6,0,-36)];
+      let neededCT = 5;
+      let neededT = 5;
+      
+      if (isMultiplayerRef.current) {
+        if (!isHost) return; // Only host spawns bots in multiplayer
+        const roomState = roomManager.getState();
+        const teamSize = roomState.settings.teamSize;
+        const humanCT = roomState.players.filter(p => p.team === 'CT').length;
+        const humanT = roomState.players.filter(p => p.team === 'T').length;
+        neededCT = Math.max(0, teamSize - humanCT);
+        neededT = Math.max(0, teamSize - humanT);
+      } else {
+        neededCT = player.team === 'CT' ? 4 : 5;
+        neededT = player.team === 'T' ? 4 : 5;
+      }
+
+      if (neededCT === 0 && neededT === 0) return;
+
+      const ctSpawns = [vec(16,0,30),vec(20,0,28),vec(24,0,30),vec(28,0,28),vec(14,0,30)];
+      const tSpawnsA = [vec(-30,0,-36),vec(-24,0,-36),vec(-18,0,-34),vec(-10,0,-34),vec(-12,0,-34)];
+      const tSpawnsB = [vec(-28,0,-36),vec(-20,0,-36),vec(-14,0,-34),vec(-8,0,-34),vec(-22,0,-36)];
       const tSpawns = state.attackSite==='A'?tSpawnsA:tSpawnsB;
       const tRoles=['LEAD_L','SUPPORT_L','MID','SUPPORT_R','LEAD_R'];
       const ctRoles=['A_ANCHOR','MID','B_ANCHOR','FLOAT','ROTATE'];
-      ctSpawns.forEach((p,i)=>bots.push(makeBot('CT',p,playerOnCT?`CT${i+2}`:`CT${i+1}`,ctRoles[i] || 'FLOAT')));
-      tSpawns.forEach((p,i)=>bots.push(makeBot('T',p,player.team==='T'?`T${i+2}`:`T${i+1}`,tRoles[i] || 'SUPPORT')));
+      
+      for(let i=0; i<neededCT; i++) {
+        bots.push(makeBot('CT', ctSpawns[i] || ctSpawns[0], `CT-Bot${i+1}`, ctRoles[i] || 'FLOAT'));
+      }
+      for(let i=0; i<neededT; i++) {
+        bots.push(makeBot('T', tSpawns[i] || tSpawns[0], `T-Bot${i+1}`, tRoles[i] || 'SUPPORT'));
+      }
+
       // Assign bomb carrier
       const ts=bots.filter(b=>b.team==='T');
-      if (player.team === 'T') {
+      if (player.team === 'T' && !isMultiplayerRef.current) {
         const carrier = Math.floor(Math.random() * (ts.length + 1));
         if (carrier === ts.length) player.hasBomb = true;
         else ts[carrier].hasBomb = true;
       } else {
-        pick(ts.slice(0,3)).hasBomb=true;
+        // In multiplayer, human T logic will be handled later, for now give it to a random T bot if available
+        if (ts.length > 0) pick(ts.slice(0,3)).hasBomb=true;
       }
       // Assign routes
       const routes=state.attackSite==='A'?routesA:routesB;
@@ -2138,6 +2156,7 @@ export default function Game() {
 
     function endRound(winner:string,reason:string){
       if(state.phase==='end'||state.matchOver)return;
+      state.frozenRoundTime = state.phase==='planted'&&state.bomb ? state.bomb.timer : state.phaseT;
       state.phase='end';state.phaseT=4.5;
       stopBombBeep();
       // CS2 economy: loss bonus escalates 1400/1900/2400/2900/3400
@@ -2381,7 +2400,7 @@ export default function Game() {
         }
       }
       else if(state.phase==='end'){state.phaseT-=dt;if(state.phaseT<=0&&!state.matchOver){state.round++;startRound();}}
-      const shown=state.phase==='planted'&&state.bomb?state.bomb.timer:state.phaseT;
+      const shown=state.phase==='end'?state.frozenRoundTime:(state.phase==='planted'&&state.bomb?state.bomb.timer:state.phaseT);
       const cl=Math.max(0,shown);
       dom.timer.textContent=`${Math.floor(cl/60)}:${String(Math.floor(cl%60)).padStart(2,'0')}`;
       dom.phase.textContent=state.phase==='freeze'?'BUY':state.phase==='planted'?'BOMB':state.phase==='end'?'END':'LIVE';
@@ -2581,7 +2600,7 @@ export default function Game() {
     const onResize=()=>{camera.aspect=dom.game.clientWidth/dom.game.clientHeight;camera.updateProjectionMatrix();renderer.setSize(dom.game.clientWidth,dom.game.clientHeight);};
     addEventListener('resize',onResize);
 
-    let last=performance.now(),animId=0,lastBroadcast=0;
+    let last=performance.now(),animId=0,lastBroadcast=0,lastPlayerBroadcast=0;
     function tick(){
       try {
         const now=performance.now();const dt=Math.min(0.05,(now-last)/1000);last=now;
@@ -2596,20 +2615,43 @@ export default function Game() {
           for(const b of bots)updateBot(b,dt);
           updateDroppedWeapons(dt);
           updateHUD();
-          roomManager.sendUpdate({
-            type: 'PLAYER_UPDATE',
-            player: {
-              id: roomManager.getMyId(),
-              name: playerNameRef.current,
-              team: player.team,
-              pos: { x: player.pos.x, y: player.pos.y, z: player.pos.z },
-              yaw: player.yaw,
-              pitch: player.pitch,
-              weapon: player.weapon,
-              hp: player.hp,
-              isShooting: player.shooting
+          
+          if (isMultiplayerRef.current && now - lastPlayerBroadcast > 50) {
+            lastPlayerBroadcast = now;
+            roomManager.sendUpdate({
+              type: 'PLAYER_UPDATE',
+              player: {
+                id: roomManager.getMyId(),
+                name: playerNameRef.current,
+                team: player.team,
+                pos: { x: player.pos.x, y: player.pos.y, z: player.pos.z },
+                yaw: player.yaw,
+                pitch: player.pitch,
+                weapon: player.weapon,
+                hp: player.hp,
+                isShooting: player.shooting
+              }
+            });
+            if (isHost) {
+              for (const b of bots) {
+                roomManager.sendUpdate({
+                  type: 'PLAYER_UPDATE',
+                  player: {
+                    id: b.id,
+                    name: b.name,
+                    team: b.team,
+                    pos: { x: b.obj.position.x, y: b.obj.position.y + 1.55, z: b.obj.position.z },
+                    yaw: b.obj.rotation.y,
+                    pitch: b.head.rotation.x,
+                    weapon: b.weapon,
+                    hp: b.hp,
+                    isShooting: false
+                  }
+                });
+              }
             }
-          });
+          }
+
           if (isHost && now - lastBroadcast > 100) {
             lastBroadcast = now;
             // Broadcast state periodically
