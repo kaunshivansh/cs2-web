@@ -88,6 +88,7 @@ export default function Game() {
   const gameBridgeRef = useRef<any>(null);
   const playerTeamRef = useRef<Team>('CT');
   const playerNameRef = useRef<string>('Player');
+  const isMultiplayerRef = useRef<boolean>(false);
 
   useEffect(() => {
     roomManager.init((id) => {
@@ -241,7 +242,7 @@ export default function Game() {
     let activeViewWeaponId = '';
     let activeViewTeam: Team = 'CT';
 
-    const remotePlayers = new Map<string, { obj: THREE.Group, body: THREE.Mesh, head: THREE.Mesh, weaponMount: THREE.Group, targetPos: THREE.Vector3, targetYaw: number, targetPitch: number }>();
+    const remotePlayers = new Map<string, { obj: THREE.Group, body: THREE.Mesh, head: THREE.Mesh, weaponMount: THREE.Group, targetPos: THREE.Vector3, targetYaw: number, targetPitch: number, team: string, name: string, hp: number, weapon: string }>();
 
     roomManager.onNetworkEvent((event) => {
       if (event.type === 'PLAYER_UPDATE') {
@@ -250,19 +251,23 @@ export default function Game() {
         
         let remote = remotePlayers.get(data.id);
         if (!remote) {
-          const model = createBotModel(data.team, data.weapon);
+          const model = createBotModel((data.team === 'Spectator' ? 'CT' : data.team) as 'CT' | 'T', data.weapon);
           scene.add(model.group);
-          remote = { 
+          const newRemote = { 
             obj: model.group, body: model.body, head: model.head, weaponMount: model.weaponMount,
             targetPos: new THREE.Vector3(data.pos.x, data.pos.y - 1.55, data.pos.z),
-            targetYaw: data.yaw, targetPitch: data.pitch
+            targetYaw: data.yaw, targetPitch: data.pitch,
+            team: data.team, name: data.name, hp: data.hp, weapon: data.weapon
           };
-          remotePlayers.set(data.id, remote);
+          remotePlayers.set(data.id, newRemote);
+          remote = newRemote;
         }
 
         remote.targetPos.set(data.pos.x, data.pos.y - 1.55, data.pos.z);
         remote.targetYaw = data.yaw;
         remote.targetPitch = data.pitch;
+        remote.hp = data.hp;
+        remote.weapon = data.weapon;
       }
     });
 
@@ -989,7 +994,7 @@ export default function Game() {
     ];
 
     function configureBots(){
-      if (menuState !== 'mode') return;
+      if (isMultiplayerRef.current) return;
       const playerOnCT = player.team === 'CT';
       const ctSpawns = playerOnCT
         ? [vec(16,0,30),vec(20,0,28),vec(24,0,30),vec(28,0,28)]
@@ -2108,6 +2113,17 @@ export default function Game() {
             money: null,
             hasBomb: bot.hasBomb,
           })),
+          ...Array.from(remotePlayers.values()).map((remote) => ({
+            team: remote.team,
+            name: remote.name,
+            hp: remote.hp,
+            alive: remote.hp > 0,
+            weaponName: WEAPONS[remote.weapon]?.name || remote.weapon,
+            kills: 0,
+            deaths: 0,
+            money: null,
+            hasBomb: false,
+          })),
         ],
       });
 
@@ -2442,7 +2458,7 @@ export default function Game() {
     const onResize=()=>{camera.aspect=dom.game.clientWidth/dom.game.clientHeight;camera.updateProjectionMatrix();renderer.setSize(dom.game.clientWidth,dom.game.clientHeight);};
     addEventListener('resize',onResize);
 
-    let last=performance.now(),animId=0;
+    let last=performance.now(),animId=0,lastBroadcast=0;
     function tick(){
       try {
         const now=performance.now();const dt=Math.min(0.05,(now-last)/1000);last=now;
@@ -2471,7 +2487,8 @@ export default function Game() {
               isShooting: player.shooting
             }
           });
-          if (isHost) {
+          if (isHost && now - lastBroadcast > 100) {
+            lastBroadcast = now;
             // Broadcast state periodically
             roomManager.broadcastState({ 
               phase: state.phase, 
@@ -2537,8 +2554,10 @@ export default function Game() {
   function handleEnterMatch(isMulti = false) {
     const name = username.trim() || 'Player';
     playerNameRef.current = name;
+    isMultiplayerRef.current = isMulti;
     if (isMulti) {
-      const me = networkPlayers.find(p => p.id === roomManager.getMyId());
+      const roomState = roomManager.getState();
+      const me = roomState.players.find(p => p.id === roomManager.getMyId());
       if (me) playerTeamRef.current = me.team as Team;
     } else {
       playerTeamRef.current = chosenTeam;
@@ -2745,7 +2764,7 @@ export default function Game() {
                       <button className="game-buybtn" style={{width: 120, fontSize: 10, justifyContent: 'center', background: chosenTeam === 'T' ? 'rgba(240,163,102,0.2)' : 'transparent', borderColor: chosenTeam === 'T' ? '#f0a366' : 'rgba(255,255,255,0.1)'}} onClick={() => setChosenTeam('T')}>T</button>
                    </div>
                 </div>
-                <button className="game-buybtn" style={{padding: '15px', justifyContent: 'center', maxWidth: 300, margin: '0 auto'}} onClick={() => handleEnterMatch()}>
+                <button className="game-buybtn" style={{padding: '15px', justifyContent: 'center', maxWidth: 300, margin: '0 auto'}} onClick={() => handleEnterMatch(false)}>
                   START MATCH
                 </button>
                 <div style={{marginTop: 20}}>
