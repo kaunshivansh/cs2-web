@@ -2297,6 +2297,34 @@ export default function Game() {
 
     function updateRound(dt:number){
       if(!state.started||state.matchOver)return;
+      
+      // Check for team wipe
+      if (state.phase === 'live' || state.phase === 'freeze' || state.phase === 'planted') {
+         const tAliveCount = (player.alive && player.team === 'T' ? 1 : 0) + 
+                             bots.filter(b => b.alive && b.team === 'T').length + 
+                             Array.from(remotePlayers.values()).filter(r => r.hp > 0 && r.team === 'T').length;
+                             
+         const ctAliveCount = (player.alive && player.team === 'CT' ? 1 : 0) + 
+                              bots.filter(b => b.alive && b.team === 'CT').length + 
+                              Array.from(remotePlayers.values()).filter(r => r.hp > 0 && r.team === 'CT').length;
+
+         if (state.phase !== 'planted') {
+             if (tAliveCount === 0 && ctAliveCount === 0) {
+                endRound('CT', 'Draw'); // In extremely rare simultaneous deaths, default to CT or Draw
+             } else if (tAliveCount === 0) {
+                endRound('CT', 'Terrorists eliminated');
+             } else if (ctAliveCount === 0) {
+                endRound('T', 'Counter-Terrorists eliminated');
+             }
+         } else {
+             // If bomb is planted, CTs must still defuse even if Ts are dead.
+             // But if all CTs die, Ts win immediately.
+             if (ctAliveCount === 0) {
+                 endRound('T', 'Counter-Terrorists eliminated');
+             }
+         }
+      }
+
       if(state.phase==='freeze'){state.phaseT-=dt;if(state.phaseT<=0){state.phase='live';state.phaseT=115;setBuyOpen(false);playRoundStart();}}
       else if(state.phase==='live'){state.phaseT-=dt;if(state.phaseT<=0)endRound('CT','Time expired');}
       else if(state.phase==='planted'){
