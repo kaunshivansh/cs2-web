@@ -94,6 +94,7 @@ export default function Game() {
   const playerTeamRef = useRef<Team>('CT');
   const playerNameRef = useRef<string>('Player');
   const isMultiplayerRef = useRef<boolean>(false);
+  const isHostRef = useRef<boolean>(false);
 
   useEffect(() => {
     roomManager.init((id) => {
@@ -533,8 +534,59 @@ export default function Game() {
     siteMarker('B',B_SITE.x,B_SITE.z,'#dc8a66');
 
     // LOAD CITY MAP (With persistent browser caching)
-    const CACHE_NAME = 'cs2-web-assets-v1';
+    const CACHE_NAME = 'cs2-web-assets-v2';
     const MAP_URL = '/assets/models/city.glb';
+
+    async function processCityModel(city: THREE.Group) {
+      if (!city) {
+        console.error("City model is null");
+        setMapLoaded(true); mapLoadedRef.current = true;
+        return;
+      }
+      prepLoadedMapAsset(city);
+      
+      const b3 = new THREE.Box3().setFromObject(city);
+      const size = b3.getSize(new THREE.Vector3());
+      console.log(`Original city size: ${size.x.toFixed(2)}x${size.y.toFixed(2)}x${size.z.toFixed(2)}`);
+      
+      const scale = 140 / (Math.max(size.x, size.z) || 1);
+      city.scale.setScalar(scale);
+      
+      b3.setFromObject(city);
+      const center = b3.getCenter(new THREE.Vector3());
+      city.position.x -= center.x;
+      city.position.z -= center.z;
+      city.position.y -= b3.min.y;
+      scene.add(city);
+
+      const meshes: THREE.Mesh[] = [];
+      city.traverse(o => { if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh); });
+      console.log(`Analyzing ${meshes.length} meshes for colliders...`);
+      
+      for (let i = 0; i < meshes.length; i++) {
+        const mesh = meshes[i];
+        const box = new THREE.Box3().setFromObject(mesh);
+        const mSize = box.getSize(new THREE.Vector3());
+        if (mSize.y > 0.4 && mSize.x > 0.05 && mSize.z > 0.05) {
+          colliders.push({ min: box.min.clone(), max: box.max.clone() });
+          minimapWalls.push({ 
+            x: (box.min.x + box.max.x)/2, 
+            z: (box.min.z + box.max.z)/2, 
+            w: mSize.x, 
+            d: mSize.z 
+          });
+        }
+        if (i % 80 === 0) {
+          setLoadingProgress(Math.min(99, 10 + Math.round((i / Math.max(1, meshes.length)) * 90)));
+          await new Promise(r => setTimeout(r, 0));
+        }
+      }
+
+      console.log(`Map ready. Colliders: ${colliders.length}.`);
+      setLoadingProgress(100);
+      setMapLoaded(true);
+      mapLoadedRef.current = true;
+    }
 
     async function fetchAndCacheMap() {
       setLoadingProgress(1);
@@ -542,72 +594,31 @@ export default function Game() {
         const cache = await caches.open(CACHE_NAME);
         let response = await cache.match(MAP_URL);
         
-        if (!response) {
-          console.log("Map not in cache, downloading...");
+        if (!response || !response.ok) {
+          console.log("Map not in cache, fetching 7.8MB model...");
           response = await fetch(MAP_URL);
-          // Only cache if successful
           if (response.ok) await cache.put(MAP_URL, response.clone());
         } else {
-          console.log("Loading map from browser cache...");
+          console.log("Loading map from local browser cache.");
         }
+
+        if (!response.ok) throw new Error("Fetch failed");
 
         const blob = await response.blob();
         const url = URL.createObjectURL(blob);
         
         gltfLoader.load(url, async (gltf) => {
-          const city = gltf.scene;
-          prepLoadedMapAsset(city);
-          
-          const b3 = new THREE.Box3().setFromObject(city);
-          const size = b3.getSize(new THREE.Vector3());
-          city.scale.setScalar(140 / Math.max(size.x, size.z));
-          
-          b3.setFromObject(city);
-          const center = b3.getCenter(new THREE.Vector3());
-          city.position.x -= center.x;
-          city.position.z -= center.z;
-          city.position.y -= b3.min.y;
-          scene.add(city);
-
-          // Async Collider Generation
-          const meshes: THREE.Mesh[] = [];
-          city.traverse(o => { if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh); });
-          
-          for (let i = 0; i < meshes.length; i++) {
-            const mesh = meshes[i];
-            const box = new THREE.Box3().setFromObject(mesh);
-            const mSize = box.getSize(new THREE.Vector3());
-            if (mSize.y > 0.5 && mSize.x > 0.1 && mSize.z > 0.1) {
-              colliders.push({ min: box.min.clone(), max: box.max.clone() });
-              minimapWalls.push({ 
-                x: (box.min.x + box.max.x)/2, 
-                z: (box.min.z + box.max.z)/2, 
-                w: mSize.x, 
-                d: mSize.z 
-              });
-            }
-            if (i % 80 === 0) {
-              setLoadingProgress(Math.min(99, 10 + Math.round((i / meshes.length) * 90)));
-              await new Promise(r => setTimeout(r, 0));
-            }
-          }
-
-          console.log(`City loaded with ${colliders.length} colliders.`);
-          setLoadingProgress(100);
-          setMapLoaded(true);
-          mapLoadedRef.current = true;
-          // Revoke after a long delay to be safe
-          setTimeout(() => URL.revokeObjectURL(url), 10000);
+          await processCityModel(gltf.scene);
+          setTimeout(() => URL.revokeObjectURL(url), 5000);
         }, undefined, (err) => {
-           console.error("GLTFLoader error:", err);
-           setMapLoaded(true); // Attempt to proceed anyway
+           console.error("Blob load error, fallback to direct:", err);
+           gltfLoader.load(MAP_URL, (gltf) => processCityModel(gltf.scene));
         });
       } catch (err) {
-        console.error("Cache/Loading error:", err);
-        gltfLoader.load(MAP_URL, (gltf) => {
-           scene.add(gltf.scene);
-           setMapLoaded(true);
-           mapLoadedRef.current = true;
+        console.error("Cache path failed, trying direct load:", err);
+        gltfLoader.load(MAP_URL, (gltf) => processCityModel(gltf.scene), undefined, () => {
+           console.error("Everything failed. Booting emergency world.");
+           setMapLoaded(true); mapLoadedRef.current = true;
         });
       }
     }
@@ -1049,24 +1060,29 @@ export default function Game() {
 
     function configureBots(){
       if (!mapLoadedRef.current) {
-        scheduleTimeout(configureBots, 200);
+        scheduleTimeout(configureBots, 500);
         return;
       }
+      if (bots.length > 0) return; 
+
       let neededCT = 5;
       let neededT = 5;
       
       if (isMultiplayerRef.current) {
-        if (!isHost) return; // Only host spawns bots in multiplayer
+        if (!isHostRef.current) return; 
         const roomState = roomManager.getState();
-        const teamSize = roomState.settings.teamSize;
+        const teamSize = roomState.settings.teamSize || 5;
         const humanCT = roomState.players.filter(p => p.team === 'CT').length;
         const humanT = roomState.players.filter(p => p.team === 'T').length;
         neededCT = Math.max(0, teamSize - humanCT);
         neededT = Math.max(0, teamSize - humanT);
       } else {
-        neededCT = player.team === 'CT' ? 4 : 5;
-        neededT = player.team === 'T' ? 4 : 5;
+        const team = playerTeamRef.current || 'CT';
+        neededCT = team === 'CT' ? 4 : 5;
+        neededT = team === 'T' ? 4 : 5;
       }
+
+      console.log(`Spawning bots: ${neededCT} CT, ${neededT} T (Player is ${playerTeamRef.current})`);
 
       if (neededCT === 0 && neededT === 0) return;
 
@@ -1089,19 +1105,17 @@ export default function Game() {
       if (player.team === 'T' && !isMultiplayerRef.current) {
         const carrier = Math.floor(Math.random() * (ts.length + 1));
         if (carrier === ts.length) player.hasBomb = true;
-        else ts[carrier].hasBomb = true;
-      } else {
-        // In multiplayer, human T logic will be handled later, for now give it to a random T bot if available
-        if (ts.length > 0) pick(ts.slice(0,3)).hasBomb=true;
+        else if (ts[carrier]) ts[carrier].hasBomb = true;
+      } else if (ts.length > 0) {
+        pick(ts.slice(0,3)).hasBomb=true;
       }
-      // Assign routes
+      
       const routes=state.attackSite==='A'?routesA:routesB;
       const ctAnchors=state.attackSite==='A'?ctAnchorsA:ctAnchorsB;
       ts.forEach((bot,i)=>{
         bot.route=(routes[i]||routes[2]).map((p:THREE.Vector3)=>p.clone());
         bot.routeIndex=0;
         bot.anchor=(state.attackSite==='A'?A_SITE:B_SITE).clone();
-        // stagger rush
         bot.rushDelay=rand(0,2.2);
       });
       const cts=bots.filter(b=>b.team==='CT');
@@ -1350,8 +1364,14 @@ export default function Game() {
       dom.hud.style.display='block';
       player.team=playerTeamRef.current;
       if(dom.playerTag){dom.playerTag.textContent=`${playerNameRef.current} · ${player.team}`;}
+      
+      // Ensure local hands match the selected team
+      syncViewModel(player.weapon, player.team);
+      
       state.started=true;state.matchOver=false;
-      requestAimLock();startRound();
+      requestAimLock();
+      console.log(`Entering match as ${player.team}...`);
+      startRound();
     }
     enterMatchRef.current=enterMatch;
     const onCanvasClick = () => { if(state.started&&player.alive&&!state.buyOpen&&!mouseLocked) requestAimLock(); };
@@ -2343,7 +2363,7 @@ export default function Game() {
     function updateRound(dt:number){
       if(!state.started||state.matchOver)return;
       
-      // Check for team wipe
+      // Delay elimination check for first 2 seconds of round to prevent instant-win race conditions
       if (state.phase === 'live' || state.phase === 'freeze' || state.phase === 'planted') {
          const tAliveCount = (player.alive && player.team === 'T' ? 1 : 0) + 
                              bots.filter(b => b.alive && b.team === 'T').length + 
@@ -2353,17 +2373,15 @@ export default function Game() {
                               bots.filter(b => b.alive && b.team === 'CT').length + 
                               Array.from(remotePlayers.values()).filter(r => r.hp > 0 && r.team === 'CT').length;
 
-         if (state.phase !== 'planted') {
+         if (state.phase !== 'planted' && state.phaseT < 114) { // Only check if round has been live for > 1s
              if (tAliveCount === 0 && ctAliveCount === 0) {
-                endRound('CT', 'Draw'); // In extremely rare simultaneous deaths, default to CT or Draw
+                endRound('CT', 'Draw');
              } else if (tAliveCount === 0) {
                 endRound('CT', 'Terrorists eliminated');
              } else if (ctAliveCount === 0) {
                 endRound('T', 'Counter-Terrorists eliminated');
              }
-         } else {
-             // If bomb is planted, CTs must still defuse even if Ts are dead.
-             // But if all CTs die, Ts win immediately.
+         } else if (state.phase === 'planted') {
              if (ctAliveCount === 0) {
                  endRound('T', 'Counter-Terrorists eliminated');
              }
@@ -2743,6 +2761,7 @@ export default function Game() {
   const onCreateRoom = () => {
     roomManager.createRoom({ ...roomSettings, map: 'HARBOR' }, username || 'Player');
     setIsHost(true);
+    isHostRef.current = true;
     setMenuState('lobby');
   };
 
