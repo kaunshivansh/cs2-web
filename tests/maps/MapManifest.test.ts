@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 
 import { MAP_MANIFEST, validateMapManifest } from '../../src/maps/MapManifest.ts';
 
-test('MAP_MANIFEST declares four competitive tactical maps with required metadata', () => {
+test('MAP_MANIFEST declares one competitive tactical map with required metadata', () => {
   const result = validateMapManifest(MAP_MANIFEST);
 
   assert.deepEqual(result.errors, []);
   assert.deepEqual(
     MAP_MANIFEST.maps.map((map) => map.id),
-    ['harbor-industrial', 'urban-gridlock', 'dockyard-storm', 'trainyard-switch']
+    ['city']
   );
 });
 

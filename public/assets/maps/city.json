@@ -1,15 +1,15 @@
 {
-  "id": "harbor-industrial",
-  "name": "Harbor Exchange",
-  "theme": "industrial",
-  "status": "playable-procedural-with-kenney-dressing",
+  "id": "city",
+  "name": "City Grid",
+  "theme": "urban",
+  "status": "playable-gltf-map",
   "spawns": {
     "CT": { "position": [24, 0, 28], "yaw": -0.35 },
     "T": { "position": [-24, 0, -36], "yaw": 0.48 }
   },
   "bombSites": {
-    "A": { "position": [-30, 0, -10], "radius": 4.2, "callout": "A Dry Dock" },
-    "B": { "position": [30, 0, -18], "radius": 4.2, "callout": "B Warehouse Yard" }
+    "A": { "position": [-30, 0, -10], "radius": 4.2, "callout": "A Site" },
+    "B": { "position": [30, 0, -18], "radius": 4.2, "callout": "B Site" }
   },
   "lanes": ["A dry dock", "mid customs", "B warehouse", "CT checkpoint", "T freight"],
   "callouts": ["T Yard", "A Dock", "A Crane", "Mid Customs", "B Ramp", "B Warehouse", "CT Gate"],

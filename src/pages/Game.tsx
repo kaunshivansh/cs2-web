@@ -40,11 +40,10 @@ export default function Game() {
   const [username, setUsername] = useState('');
   const [chosenTeam, setChosenTeam] = useState<Team>('CT');
   const [roomCode, setRoomCode] = useState('');
-  const [roomSettings, setRoomSettings] = useState({ teamSize: 5, maxRounds: 15, map: 'harbor-industrial' });
-  const [singleplayerMapId, setSingleplayerMapId] = useState('harbor-industrial');
-  const [mapName, setMapName] = useState('Harbor Exchange');
-  const [mapRadarName, setMapRadarName] = useState('Harbor');
-  const [mapTagline, setMapTagline] = useState('Tactical FPS · Harbor Terminal · Round-Based 5v5');
+  const [roomSettings, setRoomSettings] = useState({ teamSize: 5, maxRounds: 15, map: 'city' });
+  const [mapName, setMapName] = useState('City Grid');
+  const [mapRadarName, setMapRadarName] = useState('City');
+  const [mapTagline, setMapTagline] = useState('Tactical FPS · City Grid · Round-Based 5v5');
   const loadMapRef = useRef<((id: string) => void) | null>(null);
   const [networkPlayers, setNetworkPlayers] = useState<NetworkPlayer[]>([]);
   const [isHost, setIsHost] = useState(false);
@@ -125,9 +124,7 @@ export default function Game() {
     });
   }, []);
 
-  const activeMapId = isMultiplayerRef.current || menuState === 'lobby' || menuState === 'create'
-    ? roomSettings.map || 'harbor-industrial'
-    : singleplayerMapId;
+  const activeMapId = 'city';
 
   useEffect(() => {
     if (loadMapRef.current) {
@@ -530,11 +527,14 @@ export default function Game() {
         if (!mesh.isMesh) return;
         mesh.castShadow = true;
         mesh.receiveShadow = true;
+        if (!mesh.material) return;
         const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
         for (const mat of mats) {
-          const standard = mat as THREE.MeshStandardMaterial;
-          if (standard.map) standard.map.colorSpace = THREE.SRGBColorSpace;
-          standard.needsUpdate = true;
+          if (!mat) continue;
+          if ('map' in mat && (mat as any).map) {
+            (mat as any).map.colorSpace = THREE.SRGBColorSpace;
+          }
+          mat.needsUpdate = true;
         }
       });
     }
@@ -571,6 +571,10 @@ export default function Game() {
       city.position.x -= center.x; city.position.z -= center.z; city.position.y -= b3.min.y;
       scene.add(city);
 
+      // CRITICAL: Update city's world matrix immediately so that bounding boxes
+      // and getWorldPosition of spawn nodes are computed with the correct scale and position
+      city.updateMatrixWorld(true);
+
       // Extract authored metadata points (world-space) if present in the GLTF
       let foundSpawnCT = false, foundSpawnT = false, foundSiteA = false, foundSiteB = false;
       city.traverse((child) => {
@@ -591,6 +595,7 @@ export default function Game() {
       const tempB3 = new THREE.Box3();
       const vSize = new THREE.Vector3();
 
+      // Optimize: run synchronously as city.glb is small and does not need to yield across ticks
       for (let i = 0; i < meshes.length; i++) {
         const mesh = meshes[i];
         if (!mesh.geometry.boundingBox) continue;
@@ -602,43 +607,6 @@ export default function Game() {
           colliders.push({ min: tempB3.min.clone(), max: tempB3.max.clone() });
           minimapWalls.push({ x:(tempB3.min.x+tempB3.max.x)/2, z:(tempB3.min.z+tempB3.max.z)/2, w:vSize.x, d:vSize.z });
         }
-        
-        if (i % 400 === 0) {
-          setLoadingProgress(20 + Math.round((i/meshes.length)*80));
-          await new Promise(r=>setTimeout(r,0));
-        }
-      }
-
-      // If the GLTF did not include authored spawn/site nodes, fall back to the mapDef entry
-      try {
-        // Ensure city world matrix is updated so we can transform model-space manifest coords
-        city.updateMatrixWorld(true);
-
-        const toWorld = (pos: [number, number, number]) => {
-          const v = new THREE.Vector3(pos[0], pos[1], pos[2]);
-          city.localToWorld(v);
-          return v;
-        };
-
-        if (!foundSpawnCT) {
-          const s = mapDef.spawns.find((p) => p.team === 'CT');
-          if (s) CT_SPAWN_POS.copy(toWorld(s.position));
-        }
-        if (!foundSpawnT) {
-          const s = mapDef.spawns.find((p) => p.team === 'T');
-          if (s) T_SPAWN_POS.copy(toWorld(s.position));
-        }
-
-        if (!foundSiteA) {
-          const a = mapDef.bombSites.find((b) => b.id === 'A');
-          if (a) A_SITE.copy(toWorld(a.position));
-        }
-        if (!foundSiteB) {
-          const b = mapDef.bombSites.find((b) => b.id === 'B');
-          if (b) B_SITE.copy(toWorld(b.position));
-        }
-      } catch (e) {
-        // ignore manifest fallback errors in dev
       }
 
       // Create debug overlay meshes for colliders (wireframe boxes) and spawn markers
@@ -747,30 +715,19 @@ export default function Game() {
       const siteBDef = mapDef.bombSites.find(s => s.id === 'B');
       if (siteBDef) B_SITE.set(siteBDef.position[0], siteBDef.position[1], siteBDef.position[2]);
 
-      const mapUrl = `${mapDef.assetRoot}${mapDef.id}.glb`;
-      
-      const tryLoad = (url: string, isFallback: boolean) => {
-        gltfLoader.load(url, (gltf) => {
-          cityGroup = gltf.scene;
-          processCityModel(cityGroup, mapDef);
-        }, (p) => {
-          setLoadingStatus(`DOWNLOADING ${mapDef.name.toUpperCase()} (${isFallback ? 'FALLBACK' : 'MAP'})`);
-          if (p.total) setLoadingProgress(Math.min(20, Math.round((p.loaded / p.total) * 20)));
-          else setLoadingProgress(10);
-        }, (e) => {
-          console.warn(`Failed to load map asset: ${url}`, e);
-          if (!isFallback) {
-            console.log("Attempting fallback to city.glb");
-            tryLoad('/assets/models/city.glb', true);
-          } else {
-            console.error("Critical: Fallback map loading failed.");
-            setLoadingStatus('MAP LOAD FAILED');
-            setMapLoaded(true); mapLoadedRef.current = true;
-          }
-        });
-      };
-
-      tryLoad(mapUrl, false);
+      const mapUrl = '/assets/models/city.glb';
+      setLoadingStatus('DOWNLOADING MAP');
+      gltfLoader.load(mapUrl, (gltf) => {
+        cityGroup = gltf.scene;
+        processCityModel(cityGroup, mapDef);
+      }, (p) => {
+        if (p.total) setLoadingProgress(Math.min(20, Math.round((p.loaded / p.total) * 20)));
+        else setLoadingProgress(10);
+      }, (e) => {
+        console.error("Failed to load map asset:", e);
+        setLoadingStatus('MAP LOAD FAILED');
+        setMapLoaded(true); mapLoadedRef.current = true;
+      });
     }
 
     loadMapRef.current = loadSelectedMap;
@@ -3182,12 +3139,7 @@ export default function Game() {
                         style={{width:'100%', maxWidth: 300, boxSizing:'border-box',background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.12)',borderRadius:12,color:'#f3eee2',fontFamily:'inherit',fontSize:14,fontWeight:600,letterSpacing:'.08em',padding:'13px 16px',outline:'none',textAlign:'center', marginBottom: 20}}
                       />
                     </div>
-                    <div style={{marginBottom: 20}}>
-                       <div style={{fontSize: 9, opacity: 0.5, letterSpacing: '0.2em', marginBottom: 10}}>SELECT MAP</div>
-                       <select value={singleplayerMapId} onChange={e => setSingleplayerMapId(e.target.value)} style={{background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.12)', padding: '10px 15px', borderRadius: 12, color: '#f3eee2', fontSize: 13, minWidth: 200, fontFamily: 'inherit', textAlign: 'center', outline: 'none', cursor: 'pointer'}}>
-                         {MAP_MANIFEST.maps.map(m => <option key={m.id} value={m.id} style={{background: '#121720', color: '#f3eee2'}}>{m.name}</option>)}
-                       </select>
-                    </div>
+
                     <div style={{marginBottom: 20}}>
                        <div style={{fontSize: 9, opacity: 0.5, letterSpacing: '0.2em', marginBottom: 10}}>SIDE PREFERENCE</div>
                        <div style={{display: 'flex', justifyContent: 'center', gap: 10}}>
@@ -3244,12 +3196,7 @@ export default function Game() {
                           {[5,10,15,30].map(n => <option key={n} value={n}>{n} Rounds</option>)}
                         </select>
                       </div>
-                      <div>
-                        <label style={{display:'block', fontSize: 9, opacity: 0.5, marginBottom: 5}}>MAP</label>
-                        <select value={roomSettings.map} onChange={e => setRoomSettings({...roomSettings, map: e.target.value})} style={{background: '#1a1e24', color: '#fff', border: '1px solid #333', padding: '10px', borderRadius: 8, outline: 'none'}}>
-                          {MAP_MANIFEST.maps.map(m => <option key={m.id} value={m.id} style={{background: '#1a1e24', color: '#fff'}}>{m.name}</option>)}
-                        </select>
-                      </div>
+
                     </div>
                     <button className="game-buybtn" style={{padding: '15px', justifyContent: 'center', maxWidth: 300, margin: '0 auto'}} onClick={onCreateRoom}>
                       CREATE

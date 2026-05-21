@@ -41,11 +41,11 @@ export const MAP_MANIFEST: TacticalMapManifest = {
   version: 1,
   maps: [
     {
-      id: 'harbor-industrial',
-      name: 'Harbor Exchange',
-      theme: 'industrial',
-      assetRoot: '/assets/models/industrial/',
-      metadataPath: '/assets/maps/harbor-industrial.json',
+      id: 'city',
+      name: 'City Grid',
+      theme: 'urban',
+      assetRoot: '/assets/models/',
+      metadataPath: '/assets/maps/city.json',
       sourceLicense: 'CC0',
       bombSites: [
         { id: 'A', position: [-30, 0, -10], radius: 4.2 },
@@ -59,63 +59,6 @@ export const MAP_MANIFEST: TacticalMapManifest = {
       callouts: ['T Yard', 'A Dock', 'A Crane', 'Mid Customs', 'B Ramp', 'B Warehouse', 'CT Gate'],
       performanceBudget: { maxDrawCalls: 550, maxTriangles: 550_000, maxTextureMegabytes: 180 },
     },
-    {
-      id: 'urban-gridlock',
-      name: 'Gridlock',
-      theme: 'urban',
-      assetRoot: '/assets/models/urban/',
-      metadataPath: '/assets/maps/urban-gridlock.json',
-      sourceLicense: 'CC0',
-      bombSites: [
-        { id: 'A', position: [-22, 0, 8], radius: 4 },
-        { id: 'B', position: [28, 0, -16], radius: 4 },
-      ],
-      spawns: [
-        { team: 'CT', position: [30, 0, 32], yaw: -0.6 },
-        { team: 'T', position: [-34, 0, -32], yaw: 0.65 },
-      ],
-      lanes: ['apartments', 'market mid', 'underpass', 'parking', 'service alley'],
-      callouts: ['T Spawn', 'Apartments', 'Market', 'Underpass', 'Parking', 'A Store', 'B Alley'],
-      performanceBudget: { maxDrawCalls: 600, maxTriangles: 620_000, maxTextureMegabytes: 210 },
-    },
-    {
-      id: 'dockyard-storm',
-      name: 'Storm Pier',
-      theme: 'dockyard',
-      assetRoot: '/assets/models/dockyard/',
-      metadataPath: '/assets/maps/dockyard-storm.json',
-      sourceLicense: 'CC0',
-      bombSites: [
-        { id: 'A', position: [-36, 0, -4], radius: 4.4 },
-        { id: 'B', position: [24, 0, -24], radius: 4.1 },
-      ],
-      spawns: [
-        { team: 'CT', position: [22, 0, 36], yaw: -0.42 },
-        { team: 'T', position: [-30, 0, -40], yaw: 0.5 },
-      ],
-      lanes: ['pier long', 'container maze', 'warehouse mid', 'waterfront flank', 'security'],
-      callouts: ['Pier', 'Long', 'Blue Container', 'Warehouse', 'Waterfront', 'Security', 'Back B'],
-      performanceBudget: { maxDrawCalls: 560, maxTriangles: 580_000, maxTextureMegabytes: 190 },
-    },
-    {
-      id: 'trainyard-switch',
-      name: 'Switchyard',
-      theme: 'trainyard',
-      assetRoot: '/assets/models/trainyard/',
-      metadataPath: '/assets/maps/trainyard-switch.json',
-      sourceLicense: 'CC0',
-      bombSites: [
-        { id: 'A', position: [-18, 0, -18], radius: 4.2 },
-        { id: 'B', position: [34, 0, 4], radius: 4.2 },
-      ],
-      spawns: [
-        { team: 'CT', position: [28, 0, 34], yaw: -0.5 },
-        { team: 'T', position: [-32, 0, -38], yaw: 0.54 },
-      ],
-      lanes: ['yard long', 'switch house', 'ladder lane', 'maintenance', 'back rail'],
-      callouts: ['T Platform', 'Switch House', 'A Rail', 'Connector', 'Ladder', 'B Train', 'CT Bridge'],
-      performanceBudget: { maxDrawCalls: 620, maxTriangles: 650_000, maxTextureMegabytes: 220 },
-    },
   ],
 };
 
@@ -124,7 +67,7 @@ export function validateMapManifest(manifest: TacticalMapManifest): ManifestVali
   const ids = new Set<string>();
 
   if (manifest.version !== 1) errors.push('Unsupported map manifest version.');
-  if (manifest.maps.length < 4) errors.push('At least four tactical maps are required.');
+  if (manifest.maps.length < 1) errors.push('At least one tactical map is required.');
 
   for (const map of manifest.maps) {
     if (ids.has(map.id)) errors.push(`Duplicate map id: ${map.id}`);
