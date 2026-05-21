@@ -37,7 +37,8 @@ export interface RoomState {
 export type NetworkEvent = 
   | { type: 'ROOM_UPDATE'; state: RoomState }
   | { type: 'PLAYER_UPDATE'; player: NetworkPlayer }
-  | { type: 'ACTION'; id: string, action: 'shoot' | 'jump' | 'reload' };
+  | { type: 'ACTION'; id: string, action: 'shoot' | 'jump' | 'reload' }
+  | { type: 'DAMAGE'; targetId: string, damage: number, killerId: string, weapon: string, part: string };
 
 export class RoomManager {
   private peer: Peer | null = null;
@@ -124,6 +125,9 @@ export class RoomManager {
       } else if (data.type === 'ACTION') {
         this.onEvent(data); // Fire locally for host
         this.broadcast(data, [conn.peer]);
+      } else if (data.type === 'DAMAGE') {
+        this.onEvent(data); // Fire locally for host
+        this.broadcast(data, [conn.peer]);
       } else if (data.type === 'REQUEST_TEAM') {
         this.handleTeamRequest(conn.peer, data.team);
       }
@@ -170,7 +174,7 @@ export class RoomManager {
       if (data.type === 'ROOM_UPDATE') {
         this.state = data.state;
         this.onStateChange(this.state);
-      } else if (data.type === 'PLAYER_UPDATE' || data.type === 'ACTION') {
+      } else if (data.type === 'PLAYER_UPDATE' || data.type === 'ACTION' || data.type === 'DAMAGE') {
         this.onEvent(data);
       }
     });
@@ -223,7 +227,9 @@ export class RoomManager {
 
   public sendUpdate(update: any) {
     if (this.isHost) {
-      this.updatePlayerData(this.peer!.id, update.player);
+      if (update.type === 'PLAYER_UPDATE') {
+        this.updatePlayerData(this.peer!.id, update.player);
+      }
       this.broadcast(update, [this.peer!.id]);
     } else {
       const hostConn = Array.from(this.connections.values())[0];
