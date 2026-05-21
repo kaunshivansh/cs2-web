@@ -242,7 +242,7 @@ export default function Game() {
     let activeViewWeaponId = '';
     let activeViewTeam: Team = 'CT';
 
-    const remotePlayers = new Map<string, { obj: THREE.Group, body: THREE.Mesh, head: THREE.Mesh, weaponMount: THREE.Group, targetPos: THREE.Vector3, targetYaw: number, targetPitch: number, team: string, name: string, hp: number, weapon: string }>();
+    const remotePlayers = new Map<string, { obj: THREE.Group, body: THREE.Mesh, head: THREE.Object3D, weaponMount: THREE.Group, targetPos: THREE.Vector3, targetYaw: number, targetPitch: number, team: string, name: string, hp: number, weapon: string }>();
 
     roomManager.onNetworkEvent((event) => {
       if (event.type === 'PLAYER_UPDATE') {
@@ -263,14 +263,16 @@ export default function Game() {
           remote = newRemote;
         }
 
-        remote.targetPos.set(data.pos.x, data.pos.y - 1.55, data.pos.z);
-        remote.targetYaw = data.yaw;
-        remote.targetPitch = data.pitch;
-        remote.hp = data.hp;
-        remote.weapon = data.weapon;
-        
-        if (remote.hp <= 0 && remote.obj.visible) remote.obj.visible = false;
-        else if (remote.hp > 0 && !remote.obj.visible) remote.obj.visible = true;
+        if (remote) {
+          remote.targetPos.set(data.pos.x, data.pos.y - 1.55, data.pos.z);
+          remote.targetYaw = data.yaw;
+          remote.targetPitch = data.pitch;
+          remote.hp = data.hp;
+          remote.weapon = data.weapon;
+          
+          if (remote.hp <= 0 && remote.obj.visible) remote.obj.visible = false;
+          else if (remote.hp > 0 && !remote.obj.visible) remote.obj.visible = true;
+        }
       } else if (event.type === 'DAMAGE') {
         const myId = roomManager.getMyId() || '';
         if (event.targetId === myId) {
@@ -790,126 +792,74 @@ export default function Game() {
 
     // ─── BOT MODELS ─────────────────────────────────────────────────────────────
     function createBotModel(team:string, weaponId:string){
-      const palette = getTeamVisualPalette(team as Team);
       const isCT = team==='CT';
-
       const g = new THREE.Group();
-      const matBody    = new THREE.MeshStandardMaterial({color:palette.uniformColor,roughness:0.82,metalness:0.05});
-      const matVest    = new THREE.MeshStandardMaterial({color:palette.vestColor,roughness:0.86,metalness:0.06});
-      const matVestD   = new THREE.MeshStandardMaterial({color:palette.vestDetailColor,roughness:0.88,metalness:0.04});
-      const matHelmet  = new THREE.MeshStandardMaterial({color:palette.helmetColor,roughness:0.68,metalness:0.22});
-      const matSkin    = new THREE.MeshStandardMaterial({color:palette.skinColor,roughness:0.94});
-      const matDark    = new THREE.MeshStandardMaterial({color:0x1a1e24,roughness:0.88});
-      const matGlove   = new THREE.MeshStandardMaterial({color:palette.sleeveDarkColor,roughness:0.86});
-      const matVisor   = new THREE.MeshStandardMaterial({color:palette.visorColor,roughness:0.2,metalness:0.5,transparent:true,opacity:0.65});
 
-      // LEGS
-      const legGeo = new THREE.CapsuleGeometry(0.11,0.52,5,10);
-      const legL = new THREE.Mesh(legGeo,matBody); legL.position.set(-0.13,0.4,0); g.add(legL);
-      const legR = new THREE.Mesh(legGeo,matBody); legR.position.set( 0.13,0.4,0); g.add(legR);
-      // Boots
-      const bootGeo = new THREE.BoxGeometry(0.14,0.12,0.22);
-      const bootL = new THREE.Mesh(bootGeo,matDark); bootL.position.set(-0.13,0.08,0.04); g.add(bootL);
-      const bootR = new THREE.Mesh(bootGeo,matDark); bootR.position.set( 0.13,0.08,0.04); g.add(bootR);
-      // Knee pads
-      const kneePad = new THREE.Mesh(new THREE.BoxGeometry(0.18,0.14,0.08),matDark);
-      kneePad.position.set(-0.13,0.38,0.1); g.add(kneePad);
-      const kneePadR=kneePad.clone(); kneePadR.position.set(0.13,0.38,0.1); g.add(kneePadR);
+      // INVISIBLE HITBOXES (For physics and shooting logic)
+      const hitBoxMat = new THREE.MeshBasicMaterial({ visible: false });
+      const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.32,0.62,5,12), hitBoxMat); 
+      torso.position.y=1.0; 
+      g.add(torso);
+      
+      const head = new THREE.Group(); 
+      head.position.set(0,1.60,0.05); 
+      g.add(head);
+      const faceHitbox = new THREE.Mesh(new THREE.SphereGeometry(0.18,12,12), hitBoxMat); 
+      faceHitbox.position.set(0,0.08,0); 
+      head.add(faceHitbox);
 
-      // TORSO
-      const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.30,0.60,5,12),matBody); torso.position.y=1.0; g.add(torso);
-      // Tactical vest
-      const vest = new THREE.Mesh(new THREE.BoxGeometry(0.62,0.72,0.32),matVest); vest.position.set(0,1.04,0.04); g.add(vest);
-      // Vest details (pouches)
-      const pouchGeo = new THREE.BoxGeometry(0.14,0.1,0.06);
-      for(const [px,py] of [[-0.2,0.78],[0,0.78],[0.2,0.78],[-0.2,0.96],[0.2,0.96],[-0.2,1.14],[0.2,1.14]]){
-        const pouch=new THREE.Mesh(pouchGeo,matVestD); pouch.position.set(px,py,0.21); g.add(pouch);
-      }
-      // Shoulder straps
-      for(const sx of [-0.24,0.24]){
-        const strap=new THREE.Mesh(new THREE.BoxGeometry(0.07,0.5,0.06),matVestD); strap.position.set(sx,1.22,0.08); g.add(strap);
-      }
-      // Back
-      const backpack=new THREE.Mesh(new THREE.BoxGeometry(0.36,0.52,0.22),matDark); backpack.position.set(0,1.06,-0.18); g.add(backpack);
-
-      // ARMS
-      const armGeo = new THREE.CapsuleGeometry(0.075,0.44,5,10);
-      const armL = new THREE.Mesh(armGeo,matBody); armL.position.set(-0.42,1.08,0.08); armL.rotation.z=Math.PI/6; g.add(armL);
-      const armR = new THREE.Mesh(armGeo,matBody); armR.position.set( 0.32,0.98,0.18); armR.rotation.z=-Math.PI/2.85; g.add(armR);
-      // Elbow pads
-      const elbowPad=new THREE.Mesh(new THREE.BoxGeometry(0.14,0.1,0.08),matDark);
-      elbowPad.position.set(-0.44,0.92,0.06);g.add(elbowPad);
-      // Gloves
-      const gloveGeo=new THREE.SphereGeometry(0.09,10,8);
-      const glvL=new THREE.Mesh(gloveGeo,matGlove); glvL.scale.set(1,0.75,1.1); glvL.position.set(-0.50,0.72,0.12); g.add(glvL);
-      const glvR=new THREE.Mesh(gloveGeo,matGlove); glvR.scale.set(1,0.75,1.1); glvR.position.set( 0.22,0.72,0.28); g.add(glvR);
-
-      // NECK
-      const neck=new THREE.Mesh(new THREE.CylinderGeometry(0.1,0.11,0.14,10),matSkin); neck.position.y=1.50; g.add(neck);
-      // HEAD (sphere for hitbox)
-      const head=new THREE.Mesh(new THREE.SphereGeometry(0.21,16,14),matSkin); head.position.y=1.66; g.add(head);
-      // Face - balaclava/shemagh
-      const face=new THREE.Mesh(new THREE.SphereGeometry(0.215,16,14,0,Math.PI*2,0,Math.PI*0.65),matBody);
-      face.position.set(0,1.60,-0.04); face.rotation.x=-0.2; g.add(face);
-      // Goggles/sunglasses
-      const gogMat=new THREE.MeshStandardMaterial({color:0x111820,metalness:0.4,roughness:0.2});
-      const gogL=new THREE.Mesh(new THREE.SphereGeometry(0.065,12,8),gogMat); gogL.scale.z=0.45; gogL.position.set(-0.09,1.675,0.17); g.add(gogL);
-      const gogR=new THREE.Mesh(new THREE.SphereGeometry(0.065,12,8),gogMat); gogR.scale.z=0.45; gogR.position.set( 0.09,1.675,0.17); g.add(gogR);
-      const gogBridge=new THREE.Mesh(new THREE.BoxGeometry(0.04,0.02,0.03),gogMat); gogBridge.position.set(0,1.675,0.18); g.add(gogBridge);
-
-      // HELMET
-      const helmetMesh=new THREE.Mesh(new THREE.SphereGeometry(0.24,20,14,0,Math.PI*2,0,Math.PI*0.62),matHelmet);
-      helmetMesh.position.set(0,1.75,0); g.add(helmetMesh);
-      // Helmet brim
-      const brim=new THREE.Mesh(new THREE.CylinderGeometry(0.27,0.27,0.04,20,1,false,0,Math.PI*2),matHelmet);
-      brim.position.set(0,1.56,0); g.add(brim);
-      // Helmet rail (CT has night vision mount)
-      if(isCT){
-        const rail=new THREE.Mesh(new THREE.BoxGeometry(0.06,0.03,0.28),matDark); rail.position.set(0,1.86,0.06); g.add(rail);
-        const nvBase=new THREE.Mesh(new THREE.BoxGeometry(0.08,0.06,0.06),matDark); nvBase.position.set(0,1.87,0.18); g.add(nvBase);
-      }
-      // Visor (flipped up)
-      const visor=new THREE.Mesh(new THREE.SphereGeometry(0.22,12,8,0,Math.PI*2,0,Math.PI*0.3),matVisor);
-      visor.position.set(0,1.70,0.05); visor.rotation.x=0.6; g.add(visor);
-
-      // WEAPON MOUNT on right side
-      const weaponMount=new THREE.Group(); weaponMount.position.set(0.18,0.98,0.28); g.add(weaponMount);
-      const worldWeapon=createWeaponModel(weaponId,'world', team as Team);
+      // WEAPON MOUNT (Matches old programmatic scale so guns fit)
+      const weaponMount = new THREE.Group(); 
+      weaponMount.position.set(0.18,0.98,0.28); 
+      g.add(weaponMount);
+      const worldWeapon = createWeaponModel(weaponId,'world', team as Team);
       worldWeapon.group.rotation.set(0,-Math.PI/2,Math.PI/2);
-      worldWeapon.group.position.set(0,0.02,0.2); worldWeapon.group.scale.multiplyScalar(0.88);
+      worldWeapon.group.position.set(0,0.02,0.2); 
+      worldWeapon.group.scale.multiplyScalar(0.88);
       weaponMount.add(worldWeapon.group);
 
-      // Sidearm on hip
-      const hipPistol = createWeaponModel(isCT ? 'usp' : 'glock', 'world', team as Team);
-      hipPistol.group.position.set(0.24, 0.75, -0.05);
-      hipPistol.group.rotation.set(0, 0, Math.PI / 2);
-      hipPistol.group.scale.setScalar(0.38);
-      g.add(hipPistol.group);
+      // ASYNC LOAD EXTERNAL ASSET
+      const modelName = isCT ? 'sas__cs2_agent_model_blue' : 'elf_female_soldier';
+      gltfLoader.load(`/assets/models/${modelName}.glb`, (gltf) => {
+        const model = gltf.scene;
+        
+        // Ensure standard shadows
+        model.traverse((child) => {
+          if ((child as THREE.Mesh).isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+            // Fix color space for materials
+            const mat = (child as THREE.Mesh).material;
+            if (mat && !Array.isArray(mat) && (mat as THREE.MeshStandardMaterial).map) {
+              (mat as THREE.MeshStandardMaterial).map!.colorSpace = THREE.SRGBColorSpace;
+            }
+          }
+        });
 
-      // Knife on vest
-      const knifeOnVest = createWeaponModel('knife', 'world', team as Team);
-      knifeOnVest.group.position.set(-0.18, 1.1, 0.22);
-      knifeOnVest.group.rotation.set(0, 0, Math.PI);
-      knifeOnVest.group.scale.setScalar(0.35);
-      g.add(knifeOnVest.group);
+        // Fit to 1.8 unit height bounding box
+        const box = new THREE.Box3().setFromObject(model);
+        const size = box.getSize(new THREE.Vector3());
+        // Scale to a standard human height of ~1.75
+        const targetHeight = 1.75;
+        const scale = targetHeight / size.y;
+        model.scale.setScalar(scale);
 
-      // Headset
-      const matHeadset = new THREE.MeshStandardMaterial({color:0x222222, roughness:0.6});
-      const headsetBand = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.02, 8, 24, Math.PI), matHeadset);
-      headsetBand.position.set(0, 1.78, 0);
-      headsetBand.rotation.z = Math.PI / 2;
-      g.add(headsetBand);
-      const earCupGeo = new THREE.CylinderGeometry(0.06, 0.06, 0.04, 12);
-      const earL = new THREE.Mesh(earCupGeo, matHeadset); earL.position.set(-0.21, 1.66, 0); earL.rotation.z = Math.PI/2; g.add(earL);
-      const earR = new THREE.Mesh(earCupGeo, matHeadset); earR.position.set( 0.21, 1.66, 0); earR.rotation.z = Math.PI/2; g.add(earR);
+        // Center on X and Z, set Y to rest on floor
+        box.setFromObject(model);
+        const center = box.getCenter(new THREE.Vector3());
+        model.position.x = -center.x;
+        model.position.z = -center.z;
+        model.position.y = -box.min.y;
 
-      // CT badge on arm
-      if(isCT){
-        const badge=new THREE.Mesh(new THREE.CircleGeometry(0.05,10),new THREE.MeshStandardMaterial({color:palette.badgeColor,roughness:0.6}));
-        badge.position.set(-0.38,1.12,0.08); badge.rotation.y=Math.PI/2; g.add(badge);
-      }
+        // Tweak specific model offsets if they are facing the wrong way
+        if (modelName === 'sas__cs2_agent_model_blue') {
+           // Might need rotation if T-pose faces Z instead of -Z
+           model.rotation.y = Math.PI; 
+        }
 
-      shadowify(g);
+        g.add(model);
+      });
+
       return {group:g, body:torso, head, weaponMount};
     }
 
