@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
+import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { Team } from '../gameplay/match/MatchRules';
 import {
   applyCounterStrafeToVelocity,
@@ -491,6 +493,11 @@ export default function Game() {
     floorMesh.rotation.x = -Math.PI/2; floorMesh.receiveShadow = true; scene.add(floorMesh);
 
     const gltfLoader = new GLTFLoader();
+    const dracoLoader = new DRACOLoader();
+    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+    gltfLoader.setDRACOLoader(dracoLoader);
+
+    const characterCache = new Map<string, { scene: THREE.Group, animations: THREE.AnimationClip[] }>();
 
     function prepLoadedMapAsset(root: THREE.Object3D) {
       root.traverse((child) => {
@@ -529,42 +536,41 @@ export default function Game() {
       const city = gltf.scene;
       prepLoadedMapAsset(city);
       
-      // Auto-scaling for the city (Assume it needs to be quite large)
       const b3 = new THREE.Box3().setFromObject(city);
       const size = b3.getSize(new THREE.Vector3());
-      const targetWidth = 140; // Total world size
-      const scale = targetWidth / Math.max(size.x, size.z);
-      city.scale.setScalar(scale);
+      city.scale.setScalar(140 / Math.max(size.x, size.z));
       
-      // Center the city at origin
       b3.setFromObject(city);
       const center = b3.getCenter(new THREE.Vector3());
       city.position.x -= center.x;
       city.position.z -= center.z;
-      city.position.y -= b3.min.y; // Rest on floor
-
+      city.position.y -= b3.min.y;
       scene.add(city);
 
-      // Granular Collider Generation
-      city.traverse((child) => {
-        if ((child as THREE.Mesh).isMesh) {
-          const mesh = child as THREE.Mesh;
-          const box = new THREE.Box3().setFromObject(mesh);
-          // Only add colliders for substantial vertical objects (walls/crates/buildings)
-          const mSize = box.getSize(new THREE.Vector3());
-          if (mSize.y > 0.5 && mSize.x > 0.1 && mSize.z > 0.1) {
-             colliders.push({ min: box.min.clone(), max: box.max.clone() });
-             minimapWalls.push({ 
-               x: (box.min.x + box.max.x)/2, 
-               z: (box.min.z + box.max.z)/2, 
-               w: mSize.x, 
-               d: mSize.z 
-             });
-          }
+      // Optimized Collider Generation (Flattened loop is faster than recursive traverse for large maps)
+      const meshes: THREE.Mesh[] = [];
+      city.traverse(o => { if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh); });
+      
+      meshes.forEach((mesh) => {
+        const box = new THREE.Box3().setFromObject(mesh);
+        const mSize = box.getSize(new THREE.Vector3());
+        if (mSize.y > 0.5 && mSize.x > 0.1 && mSize.z > 0.1) {
+           colliders.push({ min: box.min.clone(), max: box.max.clone() });
+           minimapWalls.push({ 
+             x: (box.min.x + box.max.x)/2, 
+             z: (box.min.z + box.max.z)/2, 
+             w: mSize.x, 
+             d: mSize.z 
+           });
         }
       });
+      console.log(`City loaded with ${colliders.length} colliders.`);
       setMapLoaded(true);
       mapLoadedRef.current = true;
+    }, (progress) => {
+      if (progress.total > 0) {
+        console.log(`Loading map: ${Math.round(progress.loaded / progress.total * 100)}%`);
+      }
     });
 
     // ─── WEAPONS ────────────────────────────────────────────────────────────────
@@ -743,6 +749,8 @@ export default function Game() {
       else if(state.started&&player.alive) requestAimLock();
     }
 
+    const loadingPromises = new Map<string, Promise<any>>();
+
     function createBotModel(team:string, weaponId:string){
       const isCT = team==='CT';
       const g = new THREE.Group();
@@ -767,7 +775,7 @@ export default function Game() {
       faceHitbox.position.set(0,0.08,0); 
       headGroup.add(faceHitbox);
 
-      // WEAPON MOUNT (Initially static, parented to bone later)
+      // WEAPON MOUNT
       const weaponMount = new THREE.Group(); 
       weaponMount.position.set(0.18,0.98,0.28); 
       g.add(weaponMount);
@@ -779,22 +787,11 @@ export default function Game() {
       worldWeapon.group.scale.multiplyScalar(0.88);
       weaponMount.add(worldWeapon.group);
 
-      // ASYNC LOAD EXTERNAL ASSET
       const modelName = isCT ? 'sas__cs2_agent_model_blue' : 'elf_female_soldier';
-      gltfLoader.load(`/assets/models/${modelName}.glb`, (gltf) => {
-        const model = gltf.scene;
+      
+      const setupInstancedModel = (cached: { scene: THREE.Group, animations: THREE.AnimationClip[] }) => {
+        const model = SkeletonUtils.clone(cached.scene);
         
-        model.traverse((child) => {
-          if ((child as THREE.Mesh).isMesh) {
-            child.castShadow = true;
-            child.receiveShadow = true;
-            const mat = (child as THREE.Mesh).material;
-            if (mat && !Array.isArray(mat) && (mat as THREE.MeshStandardMaterial).map) {
-              (mat as THREE.MeshStandardMaterial).map!.colorSpace = THREE.SRGBColorSpace;
-            }
-          }
-        });
-
         // Robust Hand Bone Detection
         let hand: THREE.Object3D | null = null;
         model.traverse(obj => {
@@ -811,38 +808,52 @@ export default function Game() {
           weaponMount.scale.setScalar(2.2); 
         }
 
-        // Standardized Orientation: Face forward (-Z)
-        // Most Mixamo/CS2 models face +Z in T-pose. We rotate the scene wrapper.
         model.rotation.y = Math.PI; 
 
-        // Advanced Animation System
-        if (gltf.animations && gltf.animations.length > 0) {
+        if (cached.animations.length > 0) {
           const mixer = new THREE.AnimationMixer(model);
           res.mixer = mixer;
-          
-          const idleClip = gltf.animations.find(a => a.name.toLowerCase().includes('idle')) || gltf.animations[0];
-          const runClip = gltf.animations.find(a => a.name.toLowerCase().includes('run') || a.name.toLowerCase().includes('walk')) || idleClip;
-          
+          const idleClip = cached.animations.find(a => a.name.toLowerCase().includes('idle')) || cached.animations[0];
+          const runClip = cached.animations.find(a => a.name.toLowerCase().includes('run') || a.name.toLowerCase().includes('walk')) || idleClip;
           res.actions.idle = mixer.clipAction(idleClip);
           res.actions.run = mixer.clipAction(runClip);
-          
           res.currentAction = res.actions.idle;
           res.currentAction.play();
         }
 
-        // Scale
         const box = new THREE.Box3().setFromObject(model);
         const size = box.getSize(new THREE.Vector3());
-        const targetHeight = 1.82;
-        const scale = targetHeight / size.y;
-        model.scale.setScalar(scale);
-
-        // Grounding
+        model.scale.setScalar(1.82 / size.y);
         box.setFromObject(model);
         model.position.y = -box.min.y;
-
         g.add(model);
-      });
+      };
+
+      const cached = characterCache.get(modelName);
+      if (cached) {
+        setupInstancedModel(cached);
+      } else {
+        if (!loadingPromises.has(modelName)) {
+          const p = new Promise((resolve) => {
+            gltfLoader.load(`/assets/models/${modelName}.glb`, (gltf) => {
+              const root = gltf.scene;
+              root.traverse((child) => {
+                if ((child as THREE.Mesh).isMesh) {
+                  child.castShadow = true;
+                  child.receiveShadow = true;
+                  const mat = (child as THREE.Mesh).material as THREE.MeshStandardMaterial;
+                  if (mat.map) mat.map.colorSpace = THREE.SRGBColorSpace;
+                }
+              });
+              const data = { scene: root, animations: gltf.animations };
+              characterCache.set(modelName, data);
+              resolve(data);
+            });
+          });
+          loadingPromises.set(modelName, p);
+        }
+        loadingPromises.get(modelName)!.then(setupInstancedModel);
+      }
 
       return res;
     }
