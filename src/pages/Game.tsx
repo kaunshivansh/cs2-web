@@ -257,7 +257,7 @@ export default function Game() {
     try { (window as any).__GAME_DEBUG__ = (window as any).__GAME_DEBUG__ || {}; (window as any).__GAME_DEBUG__.colliders = colliders; } catch (e) {}
     const bots: any[] = [];
     const droppedWeapons: any[] = [];
-    let droppedBomb: { pos: THREE.Vector3 } | null = null;
+    let droppedBomb: { pos: THREE.Vector3; baseY: number } | null = null;
     let droppedBombMesh: THREE.Group | null = null;
     const tempV1 = new THREE.Vector3(), tempV2 = new THREE.Vector3();
     const tempBox = new THREE.Box3();
@@ -268,7 +268,7 @@ export default function Game() {
     let activeViewWeaponId = '';
     let activeViewTeam: Team = 'CT';
 
-    const remotePlayers = new Map<string, { obj: THREE.Group, visualGroup: THREE.Group, body: THREE.Mesh, head: THREE.Object3D, weaponMount: THREE.Group, targetPos: THREE.Vector3, targetYaw: number, targetPitch: number, team: string, name: string, hp: number, weapon: string, mixer: THREE.AnimationMixer | null, actions: { idle: any, run: any }, currentAction: any }>();
+    const remotePlayers = new Map<string, { obj: THREE.Group, visualGroup: THREE.Group, body: THREE.Mesh, head: THREE.Object3D, weaponMount: THREE.Group, targetPos: THREE.Vector3, targetYaw: number, targetPitch: number, team: string, name: string, hp: number, weapon: string, mixer: THREE.AnimationMixer | null, actions: { idle: any, walk?: any, run: any }, currentAction: any }>();
 
     roomManager.onNetworkEvent((event) => {
       if (event.type === 'PLAYER_UPDATE') {
@@ -539,10 +539,10 @@ export default function Game() {
       });
     }
 
-    let A_SITE = vec(-30,0,-10);
-    let B_SITE = vec(30,0,-18);
-    let CT_SPAWN_POS = vec(24,0,28);
-    let T_SPAWN_POS = vec(-24,0,-36);
+    let A_SITE = vec(-30,4.65,-10);
+    let B_SITE = vec(30,4.65,-18);
+    let CT_SPAWN_POS = vec(24,4.65,28);
+    let T_SPAWN_POS = vec(-24,4.65,-36);
 
     const siteMarkersGroup = new THREE.Group();
     scene.add(siteMarkersGroup);
@@ -557,7 +557,7 @@ export default function Game() {
       ctx.fillStyle=col;ctx.font='bold 130px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(label,128,140);
       const t=new THREE.CanvasTexture(c);t.colorSpace=THREE.SRGBColorSpace;
       const m=new THREE.Mesh(new THREE.PlaneGeometry(5.5,5.5),new THREE.MeshStandardMaterial({map:t,transparent:true,opacity:0.82,depthWrite:false}));
-      m.rotation.x=-Math.PI/2;m.position.set(x,0.46,z);siteMarkersGroup.add(m);
+      m.rotation.x=-Math.PI/2;m.position.set(x,CT_SPAWN_POS.y+0.02,z);siteMarkersGroup.add(m);
     }
 
     async function processCityModel(city: THREE.Group, mapDef: TacticalMapDefinition) {
@@ -607,7 +607,6 @@ export default function Game() {
         
         const name = (mesh.name || '').toLowerCase();
         const isExcluded = 
-          name.includes('plane') || 
           name.includes('road') || 
           name.includes('line') || 
           name.includes('panchina') || 
@@ -702,7 +701,7 @@ export default function Game() {
       setLoadingStatus('READY');
       setLoadingProgress(100);
       try {
-        (player as any).pos.set(CT_SPAWN_POS.x, EYE, CT_SPAWN_POS.z);
+        (player as any).pos.set(CT_SPAWN_POS.x, CT_SPAWN_POS.y + EYE, CT_SPAWN_POS.z);
       } catch (e) {}
 
       try {
@@ -870,7 +869,7 @@ export default function Game() {
       return new THREE.Vector3(spawn.x, y, spawn.z);
     }
     const player: any = {
-      pos: vec(CT_SPAWN_POS.x,EYE,CT_SPAWN_POS.z), vel: new THREE.Vector3(), onGround:true, crouch:false, walking:false,
+      pos: vec(CT_SPAWN_POS.x,CT_SPAWN_POS.y + EYE,CT_SPAWN_POS.z), vel: new THREE.Vector3(), onGround:true, crouch:false, walking:false,
       yaw:0, pitch:0, hp:100, armor:0, helmet:false, hasKit:false, money:800,
       inventory:{knife:'knife',sidearm:'usp',primary:null}, ammo:{}, weapon:'usp',
       scoped:false, reloading:false, reloadT:0, reloadWeapon:null, shootCD:0,
@@ -879,7 +878,7 @@ export default function Game() {
       kills:0, deaths:0,
       shooting: false,
       mixer: null as THREE.AnimationMixer | null,
-      actions: { idle: null, run: null },
+      actions: { idle: null, walk: null, run: null },
       currentAction: null,
     };
     try { (window as any).__GAME_DEBUG__ = (window as any).__GAME_DEBUG__ || {}; (window as any).__GAME_DEBUG__.player = player; } catch (e) {}
@@ -947,15 +946,16 @@ export default function Game() {
     function grantWeapon(id:string){ const w=WEAPONS[id];if(!w||w.slot==='knife')return;player.inventory[w.slot]=id;ensureAmmo(id);equipWeapon(id); }
 
     // ─── DROPPED WEAPONS ────────────────────────────────────────────────────────
-    function createDroppedWeapon(id:string,pos:THREE.Vector3,mag=WEAPONS[id].magSize,rsv=WEAPONS[id].reserve){
+    function createDroppedWeapon(id:string,pos:THREE.Vector3,mag=WEAPONS[id].magSize,rsv=WEAPONS[id].reserve, baseY?: number){
       const pack=createWeaponModel(id,'world');
       const base=new THREE.Group();
       pack.group.rotation.set(Math.PI/2,0.2+Math.random()*0.3,Math.PI/2+rand(-0.3,0.3));
       base.add(pack.group);
       const ring=new THREE.Mesh(new THREE.RingGeometry(0.18,0.26,24),new THREE.MeshBasicMaterial({color:0xe8c36a,transparent:true,opacity:0.5,side:THREE.DoubleSide}));
       ring.rotation.x=-Math.PI/2;ring.position.y=-0.11;base.add(ring);
-      base.position.copy(pos);base.position.y=0.16;shadowify(base);scene.add(base);
-      const e={id,group:base,ring,ammoMag:mag,ammoReserve:rsv,bobSeed:Math.random()*Math.PI*2};
+      const actualBaseY = baseY !== undefined ? baseY : pos.y;
+      base.position.copy(pos);base.position.y=actualBaseY + 0.16;shadowify(base);scene.add(base);
+      const e={id,group:base,ring,ammoMag:mag,ammoReserve:rsv,bobSeed:Math.random()*Math.PI*2, baseY: actualBaseY};
       droppedWeapons.push(e);return e;
     }
     function removeDroppedWeapon(e:any){
@@ -969,7 +969,8 @@ export default function Game() {
       const w=activeWeapon();if(!player.alive||w.slot==='knife')return;
       const id=player.inventory[w.slot];if(!id)return;
       const ammo=ammoFor(id);
-      createDroppedWeapon(id,player.pos.clone().add(getCameraDir().setY(0).normalize().multiplyScalar(0.8)),ammo.mag,ammo.reserve);
+      const playerFootY = player.pos.y - EYE;
+      createDroppedWeapon(id,player.pos.clone().add(getCameraDir().setY(0).normalize().multiplyScalar(0.8)),ammo.mag,ammo.reserve, playerFootY);
       player.inventory[w.slot]=null;
       if(player.weapon===id) equipWeapon(player.inventory.primary||player.inventory.sidearm||'knife');
     }
@@ -977,7 +978,7 @@ export default function Game() {
       const w=WEAPONS[e.id];if(!w||w.slot==='knife')return;
       const cur=player.inventory[w.slot];
       if(cur===e.id){ const a=ammoFor(e.id);a.mag=Math.max(a.mag,e.ammoMag);a.reserve=Math.max(a.reserve,e.ammoReserve);removeDroppedWeapon(e);updateHUD();return; }
-      if(cur){ const ea=ammoFor(cur);createDroppedWeapon(cur,player.pos.clone().add(getCameraDir().setY(0).normalize().multiplyScalar(0.8)),ea.mag,ea.reserve); }
+      if(cur){ const ea=ammoFor(cur);const playerFootY = player.pos.y - EYE; createDroppedWeapon(cur,player.pos.clone().add(getCameraDir().setY(0).normalize().multiplyScalar(0.8)),ea.mag,ea.reserve, playerFootY); }
       player.inventory[w.slot]=e.id;player.ammo[e.id]={mag:e.ammoMag,reserve:e.ammoReserve,magSize:w.magSize};
       removeDroppedWeapon(e);equipWeapon(e.id);
     }
@@ -1030,7 +1031,7 @@ export default function Game() {
       g.add(visualGroup);
       const res: any = { 
         group: g, visualGroup: visualGroup, body: null, head: null, weaponMount: null, 
-        mixer: null, actions: { idle: null, run: null }, 
+        mixer: null, actions: { idle: null, walk: null, run: null }, 
         currentAction: null 
       };
 
@@ -1077,9 +1078,23 @@ export default function Game() {
         if (data.animations.length > 0) {
           const m = new THREE.AnimationMixer(model); res.mixer = m;
           const iC = data.animations.find((a:any)=>a.name.toLowerCase().includes('idle'))||data.animations[0];
-          const rC = data.animations.find((a:any)=>a.name.toLowerCase().includes('run')||a.name.toLowerCase().includes('walk'))||iC;
-          res.actions.idle = m.clipAction(iC); res.actions.run = m.clipAction(rC);
-          res.currentAction = res.actions.idle; res.currentAction.play();
+          const wC = data.animations.find((a:any)=>a.name.toLowerCase().includes('walk'))||data.animations.find((a:any)=>a.name.toLowerCase().includes('run'))||iC;
+          const rC = data.animations.find((a:any)=>a.name.toLowerCase().includes('run'))||wC||iC;
+          res.actions.idle = m.clipAction(iC);
+          res.actions.walk = m.clipAction(wC);
+          res.actions.run = m.clipAction(rC);
+
+          for (const key in res.actions) {
+            const action = res.actions[key];
+            if (action) {
+              action.enabled = true;
+              action.setEffectiveTimeScale(1);
+              action.setEffectiveWeight(key === 'idle' ? 1.0 : 0.0);
+            }
+          }
+          res.currentAction = res.actions.idle;
+          res.currentActionName = 'idle';
+          if (res.actions.idle) res.actions.idle.play();
         }
         const b3 = new THREE.Box3().setFromObject(model); const sz = b3.getSize(new THREE.Vector3());
         model.scale.setScalar(1.82 / (sz.y || 1));
@@ -1197,7 +1212,7 @@ export default function Game() {
       }
     }
 
-    function spawnDroppedBomb(pos:THREE.Vector3){
+    function spawnDroppedBomb(pos:THREE.Vector3, baseY=0){
       if(droppedBombMesh){
         scene.remove(droppedBombMesh);
         disposeObject3DResources(droppedBombMesh);
@@ -1206,7 +1221,7 @@ export default function Game() {
       const body=new THREE.Mesh(new THREE.BoxGeometry(0.42,0.18,0.3),new THREE.MeshStandardMaterial({color:0x2b2f35,metalness:0.28,roughness:0.56}));
       const led=new THREE.Mesh(new THREE.BoxGeometry(0.08,0.03,0.12),new THREE.MeshStandardMaterial({color:0x990000,emissive:new THREE.Color(0xff4d4d),emissiveIntensity:0.8}));
       led.position.set(0.1,0.06,0); droppedBombMesh.add(body,led);
-      droppedBombMesh.position.copy(pos); droppedBombMesh.position.y=0.14;
+      droppedBombMesh.position.copy(pos); droppedBombMesh.position.y=baseY + 0.14;
       shadowify(droppedBombMesh); scene.add(droppedBombMesh);
     }
 
@@ -1226,31 +1241,31 @@ export default function Game() {
 
     // ─── ROUND ROUTES ───────────────────────────────────────────────────────────
     const routesA = [
-      [vec(-26,0,-36),vec(-34,0,-30),vec(-40,0,-22),vec(-36,0,-14),vec(-30,0,-10)],
-      [vec(-22,0,-34),vec(-18,0,-26),vec(-20,0,-18),vec(-24,0,-12),vec(-30,0,-10)],
-      [vec(-16,0,-34),vec(-6,0,-24),vec(-4,0,-12),vec(-14,0,-10),vec(-30,0,-10)],
-      [vec(-12,0,-34),vec(2,0,-28),vec(14,0,-24),vec(6,0,-14),vec(-10,0,-10),vec(-30,0,-10)],
-      [vec(-10,0,-36),vec(10,0,-30),vec(22,0,-22),vec(6,0,-8),vec(-18,0,-10)],
+      [vec(-26,4.65,-36),vec(-34,4.65,-30),vec(-40,4.65,-22),vec(-36,4.65,-14),vec(-30,4.65,-10)],
+      [vec(-22,4.65,-34),vec(-18,4.65,-26),vec(-20,4.65,-18),vec(-24,4.65,-12),vec(-30,4.65,-10)],
+      [vec(-16,4.65,-34),vec(-6,4.65,-24),vec(-4,4.65,-12),vec(-14,4.65,-10),vec(-30,4.65,-10)],
+      [vec(-12,4.65,-34),vec(2,4.65,-28),vec(14,4.65,-24),vec(6,4.65,-14),vec(-10,4.65,-10),vec(-30,4.65,-10)],
+      [vec(-10,4.65,-36),vec(10,4.65,-30),vec(22,4.65,-22),vec(6,4.65,-8),vec(-18,4.65,-10)],
     ];
     const routesB = [
-      [vec(-24,0,-36),vec(-16,0,-26),vec(-2,0,-22),vec(14,0,-22),vec(30,0,-18)],
-      [vec(-18,0,-34),vec(-6,0,-28),vec(8,0,-26),vec(22,0,-22),vec(30,0,-18)],
-      [vec(-10,0,-34),vec(8,0,-34),vec(22,0,-30),vec(34,0,-24),vec(30,0,-18)],
-      [vec(-28,0,-34),vec(-34,0,-24),vec(-24,0,-14),vec(-6,0,-12),vec(14,0,-14),vec(30,0,-18)],
-      [vec(-14,0,-36),vec(0,0,-20),vec(18,0,-12),vec(30,0,-18)],
+      [vec(-24,4.65,-36),vec(-16,4.65,-26),vec(-2,4.65,-22),vec(14,4.65,-22),vec(30,4.65,-18)],
+      [vec(-18,4.65,-34),vec(-6,4.65,-28),vec(8,4.65,-26),vec(22,4.65,-22),vec(30,4.65,-18)],
+      [vec(-10,4.65,-34),vec(8,4.65,-34),vec(22,4.65,-30),vec(34,4.65,-24),vec(30,4.65,-18)],
+      [vec(-28,4.65,-34),vec(-34,4.65,-24),vec(-24,4.65,-14),vec(-6,4.65,-12),vec(14,4.65,-14),vec(30,4.65,-18)],
+      [vec(-14,4.65,-36),vec(0,4.65,-20),vec(18,4.65,-12),vec(30,4.65,-18)],
     ];
 
     const ctAnchorsA = [
-      {pos:vec(-26,0,-8), yaw:Math.PI*0.77},
-      {pos:vec(4,0,-6),   yaw:Math.PI*0.94},
-      {pos:vec(28,0,-18), yaw:Math.PI*1.08},
-      {pos:vec(18,0,14),  yaw:Math.PI*1.18},
+      {pos:vec(-26,4.65,-8), yaw:Math.PI*0.77},
+      {pos:vec(4,4.65,-6),   yaw:Math.PI*0.94},
+      {pos:vec(28,4.65,-18), yaw:Math.PI*1.08},
+      {pos:vec(18,4.65,14),  yaw:Math.PI*1.18},
     ];
     const ctAnchorsB = [
-      {pos:vec(-28,0,-10),yaw:Math.PI*0.82},
-      {pos:vec(8,0,-10),  yaw:Math.PI},
-      {pos:vec(30,0,-16), yaw:Math.PI*1.05},
-      {pos:vec(24,0,10),  yaw:Math.PI*1.16},
+      {pos:vec(-28,4.65,-10),yaw:Math.PI*0.82},
+      {pos:vec(8,4.65,-10),  yaw:Math.PI},
+      {pos:vec(30,4.65,-16), yaw:Math.PI*1.05},
+      {pos:vec(24,4.65,10),  yaw:Math.PI*1.16},
     ];
 
     function configureBots(){
@@ -1275,9 +1290,9 @@ export default function Game() {
 
       console.log(`[MATCH] Spawning ${neededCT} CT and ${neededT} T bots. (Local Team: ${playerTeamRef.current})`);
 
-      const ctSpawns = [vec(16,0,30),vec(20,0,28),vec(24,0,30),vec(28,0,28),vec(14,0,30)];
-      const tSpawnsA = [vec(-30,0,-36),vec(-24,0,-36),vec(-18,0,-34),vec(-10,0,-34),vec(-12,0,-34)];
-      const tSpawnsB = [vec(-28,0,-36),vec(-20,0,-36),vec(-14,0,-34),vec(-8,0,-34),vec(-22,0,-36)];
+      const ctSpawns = [vec(16,4.65,30),vec(20,4.65,28),vec(24,4.65,30),vec(28,4.65,28),vec(14,4.65,30)];
+      const tSpawnsA = [vec(-30,4.65,-36),vec(-24,4.65,-36),vec(-18,4.65,-34),vec(-10,4.65,-34),vec(-12,4.65,-34)];
+      const tSpawnsB = [vec(-28,4.65,-36),vec(-20,4.65,-36),vec(-14,4.65,-34),vec(-8,4.65,-34),vec(-22,4.65,-36)];
       const tSpawns = state.attackSite==='A'?tSpawnsA:tSpawnsB;
       const tRoles=['LEAD_L','SUPPORT_L','MID','SUPPORT_R','LEAD_R'];
       const ctRoles=['A_ANCHOR','MID','B_ANCHOR','FLOAT','ROTATE'];
@@ -1323,7 +1338,8 @@ export default function Game() {
       const ant=new THREE.Mesh(new THREE.CylinderGeometry(0.008,0.008,0.22,8),new THREE.MeshStandardMaterial({color:0x888888,metalness:0.7}));
       ant.position.set(-0.12,0.14,0); led.position.set(0.1,0.06,0);
       mesh.add(body,led,ant);
-      mesh.position.copy(pos);mesh.position.y=0.14;shadowify(mesh);scene.add(mesh);
+      const baseY = (by.team === 'T' && by.name === playerNameRef.current) ? pos.y - EYE : pos.y;
+      mesh.position.copy(pos);mesh.position.y=baseY + 0.14;shadowify(mesh);scene.add(mesh);
       state.bomb={pos:mesh.position.clone(),timer:40,mesh};
       dom.bombIcon.style.display='block';dom.bombIcon.classList.add('armed');
       by.hasBomb=false;droppedBomb=null;
@@ -1445,8 +1461,8 @@ export default function Game() {
         bot.deaths++;
         if(killer==='player') player.kills++;
         else if(killer?.kills !== undefined) killer.kills++;
-        if(bot.hasBomb){droppedBomb={pos:bot.obj.position.clone()};spawnDroppedBomb(droppedBomb.pos);}
-        if(bot.weapon!=='knife') createDroppedWeapon(bot.weapon,bot.obj.position.clone(),bot.ammoMag,0);
+        if(bot.hasBomb){const p=bot.obj.position.clone();const bY=bot.obj.position.y;droppedBomb={pos:p,baseY:bY};spawnDroppedBomb(p,bY);}
+        if(bot.weapon!=='knife') createDroppedWeapon(bot.weapon,bot.obj.position.clone(),bot.ammoMag,0, bot.obj.position.y);
         spawnBlood(part==='head'?bot.head.getWorldPosition(new THREE.Vector3()):bot.body.getWorldPosition(new THREE.Vector3()));
         addKillfeed({name:killer==='player'?'YOU':killer.name,team:killer==='player'?player.team:killer.team},bot,w.name);
         if(killer==='player')player.money=Math.min(16000,player.money+(w.reward||300));
@@ -1469,7 +1485,7 @@ export default function Game() {
       if(player.hp<=0){
         player.alive=false;player.hp=0;player.scoped=false;document.exitPointerLock();
         player.deaths++;
-        if(player.hasBomb){player.hasBomb=false;droppedBomb={pos:player.pos.clone()};spawnDroppedBomb(droppedBomb.pos);}
+        if(player.hasBomb){player.hasBomb=false;const p=player.pos.clone();const bY=player.pos.y-EYE;droppedBomb={pos:p,baseY:bY};spawnDroppedBomb(p,bY);}
         if(byBot?.kills !== undefined) byBot.kills++;
         addKillfeed({name:byBot.name,team:byBot.team},{name:'YOU',team:player.team},w.name);
         checkRoundEnd();
@@ -1581,7 +1597,7 @@ export default function Game() {
         return false;
       };
       try1('x');try1('z');const hit=try1('y');
-      if(pos.y<eyeH){pos.y=eyeH;vel.y=0;return true;}
+      if(pos.y<CT_SPAWN_POS.y+eyeH){pos.y=CT_SPAWN_POS.y+eyeH;vel.y=0;return true;}
       return hit;
     }
 
@@ -2328,7 +2344,7 @@ export default function Game() {
       // Team-aware spawn & loadout
       const pTeam=player.team||'CT';
       if(pTeam==='T'){
-        const target = new THREE.Vector3(state.attackSite==='A' ? -28 : -16, 0, T_SPAWN_POS.z);
+        const target = new THREE.Vector3(state.attackSite==='A' ? -28 : -16, T_SPAWN_POS.y, T_SPAWN_POS.z);
         const safe = findSafeSpawn(target, EYE);
         player.pos.copy(safe);
         player.yaw = 0.48;
@@ -2347,7 +2363,7 @@ export default function Game() {
           if (Math.abs(footY - c.max.y) <= 0.12) { onGroundGuess = true; break; }
         }
       }
-      if (!onGroundGuess && footY <= 0.05) onGroundGuess = true;
+      if (!onGroundGuess && footY <= CT_SPAWN_POS.y + 0.05) onGroundGuess = true;
       player.onGround = onGroundGuess;
       player.hp=100;player.alive=true;player.scoped=false;player.crouch=false;player.jumpLock=false;player.jumpBuffer=0;
       player.stepNoiseCd=0;
@@ -2398,8 +2414,16 @@ export default function Game() {
 
     function updateDroppedWeapons(dt:number){
       const t=performance.now()/1000;
-      for(const d of droppedWeapons){d.group.position.y=0.16+Math.sin(t*2.4+d.bobSeed)*0.03;d.group.rotation.y+=dt*0.24;}
-      if(droppedBombMesh){droppedBombMesh.rotation.y+=dt*0.8;droppedBombMesh.position.y=0.14+Math.sin(t*2.8)*0.03;}
+      for(const d of droppedWeapons){
+        const baseY = d.baseY !== undefined ? d.baseY : 0;
+        d.group.position.y=baseY + 0.16 + Math.sin(t*2.4+d.bobSeed)*0.03;
+        d.group.rotation.y+=dt*0.24;
+      }
+      if(droppedBombMesh){
+        const baseY = droppedBomb ? droppedBomb.baseY : 0;
+        droppedBombMesh.rotation.y+=dt*0.8;
+        droppedBombMesh.position.y=baseY + 0.14+Math.sin(t*2.8)*0.03;
+      }
     }
 
     // ─── HUD ────────────────────────────────────────────────────────────────────
@@ -2801,14 +2825,53 @@ export default function Game() {
 
     function syncAnimation(entity: any, speed: number, dt: number) {
       if (entity.mixer && entity.actions && entity.actions.idle && entity.actions.run) {
-        const isMoving = speed > 0.15;
-        const target = isMoving ? entity.actions.run : entity.actions.idle;
+        const walkThreshold = 0.15;
+        const runThreshold = 2.6;
+        let play = 'idle';
+        if (speed > runThreshold) {
+          play = 'run';
+        } else if (speed > walkThreshold) {
+          play = 'walk';
+        }
+
+        if (entity.currentActionName === undefined) {
+          entity.currentActionName = 'idle';
+          entity.currentAction = entity.actions.idle;
+        }
         
-        if (entity.currentAction !== target) {
-          const prev = entity.currentAction;
-          entity.currentAction = target;
-          target.reset().fadeIn(0.2).play();
-          if (prev) prev.fadeOut(0.2);
+        if (entity.currentActionName !== play) {
+          const current = entity.actions[play];
+          const old = entity.actions[entity.currentActionName];
+          
+          if (current && old) {
+            const fade = 0.5; // fadeDuration is 0.5 in the sample
+
+            current.reset();
+            current.weight = 1.0;
+            current.stopFading();
+            old.stopFading();
+
+            // sync if not idle
+            if (play !== 'idle') {
+              const currentDuration = current.getClip().duration;
+              const oldDuration = old.getClip().duration;
+              if (currentDuration > 0 && oldDuration > 0) {
+                current.time = old.time * (currentDuration / oldDuration);
+              }
+            }
+
+            if (typeof (old as any)._scheduleFading === 'function' && typeof (current as any)._scheduleFading === 'function') {
+              (old as any)._scheduleFading(fade, old.getEffectiveWeight(), 0);
+              (current as any)._scheduleFading(fade, current.getEffectiveWeight(), 1);
+            } else {
+              old.fadeOut(fade);
+              current.fadeIn(fade);
+            }
+
+            current.play();
+            entity.currentActionName = play;
+            entity.currentAction = current;
+          }
         }
       }
 
