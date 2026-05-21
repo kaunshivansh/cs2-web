@@ -8,10 +8,12 @@
     "test": "node --test --experimental-strip-types tests/**/*.test.ts",
     "typecheck": "tsc --noEmit",
     "build": "vite build",
-    "serve": "vite preview --host 0.0.0.0"
+    "serve": "node server.cjs",
+    "start": "node server.cjs"
   },
   "dependencies": {
     "@types/three": "^0.184.0",
+    "express": "^5.2.1",
     "peerjs": "^1.5.5",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
