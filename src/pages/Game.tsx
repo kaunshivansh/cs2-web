@@ -31,6 +31,7 @@ import { getTeamVisualPalette } from '../rendering/viewmodel/TeamVisuals';
 import { buildAmmoView, buildScoreboardView } from '../ui/hud/ScoreboardModel';
 import { WEAPONS } from '../weapons/WeaponData';
 import { roomManager, type RoomState, type NetworkPlayer } from '../networking/RoomManager';
+import { MAP_MANIFEST } from '../maps/MapManifest';
 
 const MAP_NAME = 'HARBOR EXCHANGE';
 const MAP_RADAR_NAME = 'HARBOR';
@@ -208,6 +209,15 @@ export default function Game() {
     dom.game.appendChild(renderer.domElement);
     scene.add(camera);
 
+    // Expose core three.js objects for in-page debug overlay tooling
+    try {
+      (window as any).THREE = THREE;
+      (window as any).__GAME_DEBUG__ = (window as any).__GAME_DEBUG__ || {};
+      (window as any).__GAME_DEBUG__.scene = scene;
+      (window as any).__GAME_DEBUG__.camera = camera;
+      (window as any).__GAME_DEBUG__.renderer = renderer;
+    } catch (e) {}
+
     const hemi = new THREE.HemisphereLight(0xcfe4ff, 0x364048, 1.05);
     scene.add(hemi);
     const ambient = new THREE.AmbientLight(0xb2c2d0, 0.34);
@@ -236,6 +246,7 @@ export default function Game() {
     scene.add(new THREE.Mesh(skyGeo, skyMat));
 
     const colliders: { min: THREE.Vector3; max: THREE.Vector3 }[] = [];
+    try { (window as any).__GAME_DEBUG__ = (window as any).__GAME_DEBUG__ || {}; (window as any).__GAME_DEBUG__.colliders = colliders; } catch (e) {}
     const bots: any[] = [];
     const droppedWeapons: any[] = [];
     let droppedBomb: { pos: THREE.Vector3 } | null = null;
@@ -517,10 +528,10 @@ export default function Game() {
       });
     }
 
-    const A_SITE = vec(-30,0,-10);
-    const B_SITE = vec(30,0,-18);
-    const CT_SPAWN_POS = vec(24,0,28);
-    const T_SPAWN_POS = vec(-24,0,-36);
+    let A_SITE = vec(-30,0,-10);
+    let B_SITE = vec(30,0,-18);
+    let CT_SPAWN_POS = vec(24,0,28);
+    let T_SPAWN_POS = vec(-24,0,-36);
 
     function siteMarker(label:string,x:number,z:number,col:string) {
       const c=document.createElement('canvas');c.width=c.height=256;const ctx=c.getContext('2d')!;
@@ -531,8 +542,7 @@ export default function Game() {
       const m=new THREE.Mesh(new THREE.PlaneGeometry(5.5,5.5),new THREE.MeshStandardMaterial({map:t,transparent:true,opacity:0.82,depthWrite:false}));
       m.rotation.x=-Math.PI/2;m.position.set(x,0.46,z);scene.add(m);
     }
-    siteMarker('A',A_SITE.x,A_SITE.z,'#dc8a66');
-    siteMarker('B',B_SITE.x,B_SITE.z,'#dc8a66');
+    // site markers will be added after the map is processed to reflect authored positions
 
     // LOAD CITY MAP
     const MAP_URL = '/assets/models/city.glb';
@@ -545,7 +555,20 @@ export default function Game() {
       city.scale.setScalar(140 / (Math.max(size.x, size.z) || 1));
       b3.setFromObject(city); const center = b3.getCenter(new THREE.Vector3());
       city.position.x -= center.x; city.position.z -= center.z; city.position.y -= b3.min.y;
-      scene.add(city);
+        scene.add(city);
+
+        // Extract authored metadata points (world-space) if present in the GLTF
+        let foundSpawnCT = false, foundSpawnT = false, foundSiteA = false, foundSiteB = false;
+        city.traverse((child) => {
+          const name = (child as THREE.Object3D).name || '';
+          if (!name) return;
+          const wp = new THREE.Vector3();
+          (child as THREE.Object3D).getWorldPosition(wp);
+          if (name === 'Spawn_CT') { CT_SPAWN_POS.copy(wp); foundSpawnCT = true; }
+          if (name === 'Spawn_T') { T_SPAWN_POS.copy(wp); foundSpawnT = true; }
+          if (name === 'Site_A') { A_SITE.copy(wp); foundSiteA = true; }
+          if (name === 'Site_B') { B_SITE.copy(wp); foundSiteB = true; }
+        });
 
       const meshes: THREE.Mesh[] = [];
       city.traverse(o => { if ((o as THREE.Mesh).isMesh) { (o as THREE.Mesh).geometry.computeBoundingBox(); meshes.push(o as THREE.Mesh); } });
@@ -571,8 +594,104 @@ export default function Game() {
           await new Promise(r=>setTimeout(r,0));
         }
       }
+      // If the GLTF did not include authored spawn/site nodes, fall back to the MAP_MANIFEST entry
+      try {
+        const manifestMatch = MAP_MANIFEST.maps.find((m) => {
+          const lname = m.name.toLowerCase();
+          const mapNameL = MAP_NAME.toLowerCase();
+          const radarL = MAP_RADAR_NAME.toLowerCase();
+          return lname === mapNameL || m.id === radarL || lname.includes(radarL) || lname.includes(mapNameL);
+        });
+
+        if (manifestMatch) {
+          // Ensure city world matrix is updated so we can transform model-space manifest coords
+          city.updateMatrixWorld(true);
+
+          const toWorld = (pos: [number, number, number]) => {
+            const v = new THREE.Vector3(pos[0], pos[1], pos[2]);
+            city.localToWorld(v);
+            return v;
+          };
+
+          if (!foundSpawnCT) {
+            const s = manifestMatch.spawns.find((p) => p.team === 'CT');
+            if (s) CT_SPAWN_POS.copy(toWorld(s.position));
+          }
+          if (!foundSpawnT) {
+            const s = manifestMatch.spawns.find((p) => p.team === 'T');
+            if (s) T_SPAWN_POS.copy(toWorld(s.position));
+          }
+
+          if (!foundSiteA) {
+            const a = manifestMatch.bombSites.find((b) => b.id === 'A');
+            if (a) A_SITE.copy(toWorld(a.position));
+          }
+          if (!foundSiteB) {
+            const b = manifestMatch.bombSites.find((b) => b.id === 'B');
+            if (b) B_SITE.copy(toWorld(b.position));
+          }
+        }
+      } catch (e) {
+        // ignore manifest fallback errors in dev
+      }
+      // Create debug overlay meshes for colliders (wireframe boxes) and spawn markers
+      try {
+        const debugParent = new THREE.Group();
+        debugParent.name = 'debug-overlays';
+
+        for (const c of colliders) {
+          const size = new THREE.Vector3().subVectors(c.max, c.min);
+          const center = new THREE.Vector3().addVectors(c.min, c.max).multiplyScalar(0.5);
+          const geo = new THREE.BoxGeometry(size.x, size.y, size.z);
+          const mat = new THREE.MeshBasicMaterial({ color: 0x00ff66, wireframe: true });
+          const m = new THREE.Mesh(geo, mat);
+          m.position.copy(center);
+          debugParent.add(m);
+        }
+
+        const spawnMatCT = new THREE.MeshBasicMaterial({ color: 0x3399ff, transparent: true, opacity: 0.9 });
+        const spawnMatT = new THREE.MeshBasicMaterial({ color: 0xff6633, transparent: true, opacity: 0.9 });
+        const ctSphere = new THREE.Mesh(new THREE.SphereGeometry(0.5, 8, 8), spawnMatCT);
+        ctSphere.position.copy(CT_SPAWN_POS);
+        debugParent.add(ctSphere);
+        const tSphere = new THREE.Mesh(new THREE.SphereGeometry(0.5, 8, 8), spawnMatT);
+        tSphere.position.copy(T_SPAWN_POS);
+        debugParent.add(tSphere);
+
+        const aMark = new THREE.Mesh(new THREE.CircleGeometry(2.2, 16), new THREE.MeshBasicMaterial({ color: 0xdc8a66, transparent: true, opacity: 0.85 }));
+        aMark.rotation.x = -Math.PI / 2; aMark.position.copy(A_SITE); aMark.position.y += 0.45; debugParent.add(aMark);
+        const bMark = new THREE.Mesh(new THREE.CircleGeometry(2.2, 16), new THREE.MeshBasicMaterial({ color: 0xdc8a66, transparent: true, opacity: 0.85 }));
+        bMark.rotation.x = -Math.PI / 2; bMark.position.copy(B_SITE); bMark.position.y += 0.45; debugParent.add(bMark);
+
+        scene.add(debugParent);
+        try { (window as any).__GAME_DEBUG__ = (window as any).__GAME_DEBUG__ || {}; (window as any).__GAME_DEBUG__.debugOverlays = debugParent; } catch (e) {}
+      } catch (e) { console.warn('Failed to create debug overlays', e); }
+
+      // Place site markers now that authored positions are known
+      siteMarker('A', A_SITE.x, A_SITE.z, '#dc8a66');
+      siteMarker('B', B_SITE.x, B_SITE.z, '#dc8a66');
+
       setLoadingStatus('READY');
-      setLoadingProgress(100); setMapLoaded(true); mapLoadedRef.current = true;
+      setLoadingProgress(100);
+      // Move player to authored CT spawn (respecting eye height)
+      try {
+        // 'player' is defined later in this scope; map load occurs asynchronously after that initialization
+        // so updating here is safe at runtime.
+        (player as any).pos.set(CT_SPAWN_POS.x, EYE, CT_SPAWN_POS.z);
+      } catch (e) {}
+
+      // Expose authored positions and collider count for quick visual debugging in dev
+      try {
+        (window as any).__MAP_DEBUG__ = {
+          ctSpawn: CT_SPAWN_POS.clone(),
+          tSpawn: T_SPAWN_POS.clone(),
+          aSite: A_SITE.clone(),
+          bSite: B_SITE.clone(),
+          collidersCount: colliders.length,
+        };
+      } catch (e) {}
+
+      setMapLoaded(true); mapLoadedRef.current = true;
     }
 
     gltfLoader.load(MAP_URL, (gltf) => {
@@ -582,10 +701,19 @@ export default function Game() {
       if (p.total) setLoadingProgress(Math.min(20, Math.round((p.loaded / p.total) * 20)));
       else setLoadingProgress(10);
     }, (e) => {
-      console.error(e); 
-      setLoadingStatus('LOAD FAILED');
+      console.error("Map load failed:", e); 
+      setLoadingStatus('MAP LOAD FAILED - BOOTING FALLBACK');
       setMapLoaded(true); mapLoadedRef.current=true; 
     });
+
+    // Safety timeout: If map isn't ready in 20s, force proceed with fallback floor
+    scheduleTimeout(() => {
+      if (!mapLoadedRef.current) {
+        console.warn("Map load timeout. Using emergency floor.");
+        setLoadingStatus('BOOTING EMERGENCY WORLD');
+        setMapLoaded(true); mapLoadedRef.current = true;
+      }
+    }, 20000);
 
     // ─── WEAPONS ────────────────────────────────────────────────────────────────
     // Using WEAPONS from WeaponData.ts
@@ -614,6 +742,53 @@ export default function Game() {
     const BUY_ITEMS = () => player.team === 'T' ? BUY_ITEMS_T : BUY_ITEMS_CT;
 
     const PLAYER_HEIGHT = 1.72, CROUCH_HEIGHT = 1.34, EYE = 1.55;
+    // Find a safe spawn location near `spawn` that does not intersect colliders.
+    function findSafeSpawn(spawn: THREE.Vector3, eyeH: number) {
+      const r = 0.34; // player horizontal radius used by collisions
+      const startY = (spawn.y || 0) + eyeH;
+
+      // helper to test overlap at given x,y,z
+      const overlaps = (x: number, y: number, z: number) => {
+        const mn = new THREE.Vector3(x - r, y - eyeH, z - r);
+        const mx = new THREE.Vector3(x + r, y + 0.1, z + r);
+        for (const c of colliders) {
+          if (mn.x < c.max.x && mx.x > c.min.x && mn.y < c.max.y && mx.y > c.min.y && mn.z < c.max.z && mx.z > c.min.z) {
+            return true;
+          }
+        }
+        return false;
+      };
+
+      // Try vertical lifts first
+      for (let dy = 0; dy <= 6; dy += 0.25) {
+        const y = startY + dy;
+        if (!overlaps(spawn.x, y, spawn.z)) return new THREE.Vector3(spawn.x, y, spawn.z);
+      }
+
+      // Try radial offsets (spiral)
+      const radii = [0.5, 1.0, 1.6, 2.4];
+      for (const rad of radii) {
+        for (let a = 0; a < 360; a += 45) {
+          const ang = (a * Math.PI) / 180;
+          const x = spawn.x + Math.cos(ang) * rad;
+          const z = spawn.z + Math.sin(ang) * rad;
+          for (let dy = 0; dy <= 3.0; dy += 0.25) {
+            const y = startY + dy;
+            if (!overlaps(x, y, z)) return new THREE.Vector3(x, y, z);
+          }
+        }
+      }
+
+      // Fallback: place on top of the highest collider under spawn
+      let highest = -Infinity;
+      for (const c of colliders) {
+        if (spawn.x >= c.min.x - r && spawn.x <= c.max.x + r && spawn.z >= c.min.z - r && spawn.z <= c.max.z + r) {
+          highest = Math.max(highest, c.max.y);
+        }
+      }
+      const y = (highest === -Infinity ? startY : highest + eyeH + 0.05);
+      return new THREE.Vector3(spawn.x, y, spawn.z);
+    }
     const player: any = {
       pos: vec(CT_SPAWN_POS.x,EYE,CT_SPAWN_POS.z), vel: new THREE.Vector3(), onGround:true, crouch:false, walking:false,
       yaw:0, pitch:0, hp:100, armor:0, helmet:false, hasKit:false, money:800,
@@ -624,7 +799,10 @@ export default function Game() {
       kills:0, deaths:0,
       shooting: false,
       mixer: null as THREE.AnimationMixer | null,
+      actions: { idle: null, run: null },
+      currentAction: null,
     };
+    try { (window as any).__GAME_DEBUG__ = (window as any).__GAME_DEBUG__ || {}; (window as any).__GAME_DEBUG__.player = player; } catch (e) {}
     const state: any = {
       started:false, round:1, ctScore:0, tScore:0, maxRounds:15,
       phase:'freeze', phaseT:0, frozenRoundTime:0, bomb:null, buyOpen:false, defusingT:0, attackSite:'A', matchOver:false,
@@ -994,11 +1172,6 @@ export default function Game() {
     ];
 
     function configureBots(){
-      if (!mapLoadedRef.current) {
-        console.log("[BOTS] Map not ready, retrying in 500ms...");
-        scheduleTimeout(configureBots, 500);
-        return;
-      }
       if (bots.length > 0) return; 
 
       let neededCT = 5;
@@ -1018,7 +1191,7 @@ export default function Game() {
         neededT = team === 'T' ? 4 : 5;
       }
 
-      console.log(`[BOTS] Spawning ${neededCT} CT and ${neededT} T. Player is ${playerTeamRef.current}. Total expected: 10`);
+      console.log(`[MATCH] Spawning ${neededCT} CT and ${neededT} T bots. (Local Team: ${playerTeamRef.current})`);
 
       const ctSpawns = [vec(16,0,30),vec(20,0,28),vec(24,0,30),vec(28,0,28),vec(14,0,30)];
       const tSpawnsA = [vec(-30,0,-36),vec(-24,0,-36),vec(-18,0,-34),vec(-10,0,-34),vec(-12,0,-34)];
@@ -1034,7 +1207,6 @@ export default function Game() {
         bots.push(makeBot('T', tSpawns[i] || tSpawns[0], `T-Bot${i+1}`, tRoles[i] || 'SUPPORT'));
       }
 
-      // Assign bomb carrier
       const ts=bots.filter(b=>b.team==='T');
       if (player.team === 'T' && !isMultiplayerRef.current) {
         const carrier = Math.floor(Math.random() * (ts.length + 1));
@@ -2074,12 +2246,27 @@ export default function Game() {
       // Team-aware spawn & loadout
       const pTeam=player.team||'CT';
       if(pTeam==='T'){
-        player.pos.set(state.attackSite==='A' ? -28 : -16, EYE, T_SPAWN_POS.z);
-        player.yaw=0.48;
+        const target = new THREE.Vector3(state.attackSite==='A' ? -28 : -16, 0, T_SPAWN_POS.z);
+        const safe = findSafeSpawn(target, EYE);
+        player.pos.copy(safe);
+        player.yaw = 0.48;
       } else {
-        player.pos.set(CT_SPAWN_POS.x,EYE,CT_SPAWN_POS.z);player.yaw=-0.35;
+        const target = CT_SPAWN_POS.clone();
+        const safe = findSafeSpawn(target, EYE);
+        player.pos.copy(safe);
+        player.yaw = -0.35;
       }
       player.vel.set(0,0,0);
+      // Compute onGround by checking proximity to collider tops or floor
+      const footY = player.pos.y - EYE;
+      let onGroundGuess = false;
+      for (const c of colliders) {
+        if (player.pos.x > c.min.x - 0.34 && player.pos.x < c.max.x + 0.34 && player.pos.z > c.min.z - 0.34 && player.pos.z < c.max.z + 0.34) {
+          if (Math.abs(footY - c.max.y) <= 0.12) { onGroundGuess = true; break; }
+        }
+      }
+      if (!onGroundGuess && footY <= 0.05) onGroundGuess = true;
+      player.onGround = onGroundGuess;
       player.hp=100;player.alive=true;player.scoped=false;player.crouch=false;player.jumpLock=false;player.jumpBuffer=0;
       player.stepNoiseCd=0;
       player.hasBomb=false;
@@ -2297,7 +2484,7 @@ export default function Game() {
     function updateRound(dt:number){
       if(!state.started||state.matchOver)return;
       
-      if (state.phase === 'live' || state.phase === 'freeze' || state.phase === 'planted') {
+      if (state.phase === 'live' || state.phase === 'planted') {
          const tAliveCount = (player.alive && player.team === 'T' ? 1 : 0) + 
                              bots.filter(b => b.alive && b.team === 'T').length + 
                              Array.from(remotePlayers.values()).filter(r => r.hp > 0 && r.team === 'T').length;
@@ -2306,20 +2493,11 @@ export default function Game() {
                               bots.filter(b => b.alive && b.team === 'CT').length + 
                               Array.from(remotePlayers.values()).filter(r => r.hp > 0 && r.team === 'CT').length;
 
-         // Determine if match is actually ready to check for wins
-         let expectedTotal = 10;
-         if (isMultiplayerRef.current) {
-            const rs = roomManager.getState();
-            expectedTotal = rs.players.length + bots.length;
-         }
-         
-         const matchReady = isMultiplayerRef.current ? true : (bots.length >= 8); // 9 total including player
-
-         if (matchReady && state.phase !== 'planted' && state.phaseT < 114) { 
+         if (state.phase !== 'planted') { 
              if (tAliveCount === 0 && ctAliveCount === 0) endRound('CT', 'Draw');
              else if (tAliveCount === 0) endRound('CT', 'Terrorists eliminated');
              else if (ctAliveCount === 0) endRound('T', 'Counter-Terrorists eliminated');
-         } else if (state.phase === 'planted' && ctAliveCount === 0) {
+         } else if (ctAliveCount === 0) {
              endRound('T', 'Counter-Terrorists eliminated');
          }
       }
@@ -2540,7 +2718,7 @@ export default function Game() {
     addEventListener('resize',onResize);
 
     function syncAnimation(entity: any, speed: number) {
-      if (!entity.mixer || !entity.actions.idle || !entity.actions.run) return;
+      if (!entity.mixer || !entity.actions || !entity.actions.idle || !entity.actions.run) return;
       const isMoving = speed > 0.15;
       const target = isMoving ? entity.actions.run : entity.actions.idle;
       

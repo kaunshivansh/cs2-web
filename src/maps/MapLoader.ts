@@ -92,11 +92,27 @@ export class MapLoader {
             }
         }
 
-        // Extract metadata points if set in Blender
-        if (mesh.name === 'Spawn_CT') this.mapData!.spawnCT.copy(mesh.position);
-        if (mesh.name === 'Spawn_T') this.mapData!.spawnT.copy(mesh.position);
-        if (mesh.name === 'Site_A') this.mapData!.siteA.copy(mesh.position);
-        if (mesh.name === 'Site_B') this.mapData!.siteB.copy(mesh.position);
+        // Extract metadata points (use world-space positions to respect transforms)
+        if (mesh.name === 'Spawn_CT') {
+          const wp = new THREE.Vector3();
+          mesh.getWorldPosition(wp);
+          this.mapData!.spawnCT.copy(wp);
+        }
+        if (mesh.name === 'Spawn_T') {
+          const wp = new THREE.Vector3();
+          mesh.getWorldPosition(wp);
+          this.mapData!.spawnT.copy(wp);
+        }
+        if (mesh.name === 'Site_A') {
+          const wp = new THREE.Vector3();
+          mesh.getWorldPosition(wp);
+          this.mapData!.siteA.copy(wp);
+        }
+        if (mesh.name === 'Site_B') {
+          const wp = new THREE.Vector3();
+          mesh.getWorldPosition(wp);
+          this.mapData!.siteB.copy(wp);
+        }
       }
     });
 
