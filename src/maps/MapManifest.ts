@@ -48,12 +48,12 @@ export const MAP_MANIFEST: TacticalMapManifest = {
       metadataPath: '/assets/maps/city.json',
       sourceLicense: 'CC0',
       bombSites: [
-        { id: 'A', position: [-30, 0, -10], radius: 4.2 },
-        { id: 'B', position: [30, 0, -18], radius: 4.2 },
+        { id: 'A', position: [-10, 4.65, 10], radius: 4.2 },
+        { id: 'B', position: [10, 4.65, -10], radius: 4.2 },
       ],
       spawns: [
-        { team: 'CT', position: [24, 0, 28], yaw: -0.35 },
-        { team: 'T', position: [-24, 0, -36], yaw: 0.48 },
+        { team: 'CT', position: [30, 4.65, 25], yaw: -0.35 },
+        { team: 'T', position: [-30, 4.65, -25], yaw: 0.48 },
       ],
       lanes: ['A dry dock', 'mid customs', 'B warehouse', 'CT checkpoint', 'T freight'],
       callouts: ['T Yard', 'A Dock', 'A Crane', 'Mid Customs', 'B Ramp', 'B Warehouse', 'CT Gate'],

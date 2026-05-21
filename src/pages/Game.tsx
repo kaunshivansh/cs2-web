@@ -566,8 +566,13 @@ export default function Game() {
       prepLoadedMapAsset(city);
       const b3 = new THREE.Box3().setFromObject(city);
       const size = b3.getSize(new THREE.Vector3());
-      city.scale.setScalar(140 / (Math.max(size.x, size.z) || 1));
+      const scaleFactor = 140 / (Math.max(size.x, size.z) || 1);
+      console.log("GLTF ORIGINAL SIZE:", size.x, size.y, size.z);
+      console.log("COMPUTED SCALE FACTOR:", scaleFactor);
+      city.scale.setScalar(scaleFactor);
       b3.setFromObject(city); const center = b3.getCenter(new THREE.Vector3());
+      console.log("GLTF CENTERED CENTER:", center.x, center.y, center.z);
+      console.log("GLTF B3 MIN/MAX:", b3.min.x, b3.min.y, b3.min.z, "MAX:", b3.max.x, b3.max.y, b3.max.z);
       city.position.x -= center.x; city.position.z -= center.z; city.position.y -= b3.min.y;
       scene.add(city);
 
@@ -600,6 +605,24 @@ export default function Game() {
         const mesh = meshes[i];
         if (!mesh.geometry.boundingBox) continue;
         
+        const name = (mesh.name || '').toLowerCase();
+        const isExcluded = 
+          name.includes('plane') || 
+          name.includes('road') || 
+          name.includes('line') || 
+          name.includes('panchina') || 
+          name.includes('seemaforo') || 
+          name.includes('cartello') || 
+          name.includes('divieto') || 
+          name.includes('cespuglio') || 
+          name.includes('macchina') || 
+          name.includes('camion') || 
+          name.includes('bus') || 
+          name.includes('cylinder') || 
+          name.includes('sphere');
+
+        if (isExcluded) continue;
+
         tempB3.copy(mesh.geometry.boundingBox).applyMatrix4(mesh.matrixWorld);
         tempB3.getSize(vSize);
         
@@ -608,6 +631,35 @@ export default function Game() {
           minimapWalls.push({ x:(tempB3.min.x+tempB3.max.x)/2, z:(tempB3.min.z+tempB3.max.z)/2, w:vSize.x, d:vSize.z });
         }
       }
+
+      // If the GLTF did not include authored spawn/site nodes, fall back to the mapDef entry
+      try {
+        const toWorld = (pos: [number, number, number]) => {
+          // Manifest positions are already in world-space
+          return new THREE.Vector3(pos[0], pos[1], pos[2]);
+        };
+
+        if (!foundSpawnCT) {
+          const s = mapDef.spawns.find((p) => p.team === 'CT');
+          if (s) CT_SPAWN_POS.copy(toWorld(s.position));
+        }
+        if (!foundSpawnT) {
+          const s = mapDef.spawns.find((p) => p.team === 'T');
+          if (s) T_SPAWN_POS.copy(toWorld(s.position));
+        }
+
+        if (!foundSiteA) {
+          const a = mapDef.bombSites.find((b) => b.id === 'A');
+          if (a) A_SITE.copy(toWorld(a.position));
+        }
+        if (!foundSiteB) {
+          const b = mapDef.bombSites.find((b) => b.id === 'B');
+          if (b) B_SITE.copy(toWorld(b.position));
+        }
+      } catch (e) {
+        console.warn("Manifest fallback failed:", e);
+      }
+
 
       // Create debug overlay meshes for colliders (wireframe boxes) and spawn markers
       try {
@@ -2796,8 +2848,8 @@ export default function Game() {
         if(adaptiveQuality.sampleFrame(dt)) renderer.setPixelRatio(adaptiveQuality.pixelRatio);
         if(state.started){
           updateSoundEvents(dt);
-          // Multi: only host runs round logic
-          if (menuState === 'mode' || isHost) {
+          // Multi: only host runs round logic. Singleplayer always updates.
+          if (menuState === 'mode' || isHost || !isMultiplayerRef.current) {
             updateRound(dt);
           }
           updatePlayer(dt);

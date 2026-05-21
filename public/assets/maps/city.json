@@ -4,12 +4,12 @@
   "theme": "urban",
   "status": "playable-gltf-map",
   "spawns": {
-    "CT": { "position": [24, 0, 28], "yaw": -0.35 },
-    "T": { "position": [-24, 0, -36], "yaw": 0.48 }
+    "CT": { "position": [30, 4.65, 25], "yaw": -0.35 },
+    "T": { "position": [-30, 4.65, -25], "yaw": 0.48 }
   },
   "bombSites": {
-    "A": { "position": [-30, 0, -10], "radius": 4.2, "callout": "A Site" },
-    "B": { "position": [30, 0, -18], "radius": 4.2, "callout": "B Site" }
+    "A": { "position": [-10, 4.65, 10], "radius": 4.2, "callout": "A Site" },
+    "B": { "position": [10, 4.65, -10], "radius": 4.2, "callout": "B Site" }
   },
   "lanes": ["A dry dock", "mid customs", "B warehouse", "CT checkpoint", "T freight"],
   "callouts": ["T Yard", "A Dock", "A Crane", "Mid Customs", "B Ramp", "B Warehouse", "CT Gate"],
