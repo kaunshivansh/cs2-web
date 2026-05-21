@@ -45,6 +45,8 @@ export default function Game() {
   const [networkPlayers, setNetworkPlayers] = useState<NetworkPlayer[]>([]);
   const [isHost, setIsHost] = useState(false);
   const [peerId, setPeerId] = useState('');
+  const [mapLoaded, setMapLoaded] = useState(false);
+  const mapLoadedRef = useRef(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const minimapRef = useRef<HTMLCanvasElement>(null);
@@ -484,13 +486,7 @@ export default function Game() {
     const floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(140,140), new THREE.MeshStandardMaterial({ color:0xb09870, roughness:0.98, metalness:0.02 }));
     floorMesh.rotation.x = -Math.PI/2; floorMesh.receiveShadow = true; scene.add(floorMesh);
 
-    // CC0 modular map pieces from Kenney City Kit Roads.
-    const mapKitGroup = new THREE.Group();
-    mapKitGroup.name = 'Kenney City Kit Roads map dressing';
-    scene.add(mapKitGroup);
     const gltfLoader = new GLTFLoader();
-    const mapAssetCache = new Map<string, THREE.Group>();
-    const MAP_ASSET_BASE = '/assets/kenney-city-kit-roads/';
 
     function prepLoadedMapAsset(root: THREE.Object3D) {
       root.traverse((child) => {
@@ -507,116 +503,65 @@ export default function Game() {
       });
     }
 
-    function placeMapAsset(name: string, x: number, z: number, rotation = 0, scale = 10, y = 0.035, addCollider = false) {
-      const addClone = (source: THREE.Group) => {
-        const clone = source.clone(true);
-        clone.position.set(x, y, z);
-        clone.rotation.y = rotation;
-        clone.scale.setScalar(scale);
-        mapKitGroup.add(clone);
-        if (addCollider) {
-          const b3 = new THREE.Box3().setFromObject(clone);
-          colliders.push({ min: b3.min.clone(), max: b3.max.clone() });
-          const size = b3.getSize(new THREE.Vector3());
-          minimapWalls.push({ x, z, w: size.x, d: size.z });
-        }
-      };
-      const cached = mapAssetCache.get(name);
-      if (cached) { addClone(cached); return; }
-      gltfLoader.load(`${MAP_ASSET_BASE}${name}.glb`, (gltf) => {
-        const source = gltf.scene;
-        prepLoadedMapAsset(source);
-        mapAssetCache.set(name, source);
-        addClone(source);
-      }, undefined, () => {
-        // The procedural geometry remains playable if a downloaded asset fails.
-      });
-    }
-
     const A_SITE = vec(-30,0,-10);
     const B_SITE = vec(30,0,-18);
     const CT_SPAWN_POS = vec(24,0,28);
     const T_SPAWN_POS = vec(-24,0,-36);
 
-    // Perimeter barriers to keep the game in bounds
-    for(let i=-65; i<=65; i+=10.5) {
-      placeMapAsset('road-straight-barrier', i, -65, 0, 10.5, 0.024, true);
-      placeMapAsset('road-straight-barrier', i, 65, Math.PI, 10.5, 0.024, true);
-      placeMapAsset('road-straight-barrier', -65, i, -Math.PI/2, 10.5, 0.024, true);
-      placeMapAsset('road-straight-barrier', 65, i, Math.PI/2, 10.5, 0.024, true);
+    function siteMarker(label:string,x:number,z:number,col:string) {
+      const c=document.createElement('canvas');c.width=c.height=256;const ctx=c.getContext('2d')!;
+      ctx.fillStyle='rgba(20,16,10,0.22)';ctx.beginPath();ctx.arc(128,128,112,0,Math.PI*2);ctx.fill();
+      ctx.strokeStyle=col;ctx.lineWidth=14;ctx.beginPath();ctx.arc(128,128,90,0,Math.PI*2);ctx.stroke();
+      ctx.fillStyle=col;ctx.font='bold 130px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(label,128,140);
+      const t=new THREE.CanvasTexture(c);t.colorSpace=THREE.SRGBColorSpace;
+      const m=new THREE.Mesh(new THREE.PlaneGeometry(5.5,5.5),new THREE.MeshStandardMaterial({map:t,transparent:true,opacity:0.82,depthWrite:false}));
+      m.rotation.x=-Math.PI/2;m.position.set(x,0.46,z);scene.add(m);
     }
+    siteMarker('A',A_SITE.x,A_SITE.z,'#dc8a66');
+    siteMarker('B',B_SITE.x,B_SITE.z,'#dc8a66');
 
-    const roadTiles: Array<[string, number, number, number?]> = [
-      // Spawns & Mains
-      ['road-straight', -24, -36, Math.PI / 2],
-      ['road-straight',  -8, -28, Math.PI / 2],
-      ['road-crossroad-line', 4, -10, 0],
-      ['road-straight',   4,   8, 0],
-      ['road-straight',  20,  24, Math.PI / 2],
+    // LOAD CITY MAP
+    gltfLoader.load('/assets/models/city.glb', (gltf) => {
+      const city = gltf.scene;
+      prepLoadedMapAsset(city);
       
-      // A Site & Connector
-      ['road-bend-sidewalk', -26, -10, Math.PI],
-      ['road-curve', -40, -22, Math.PI / 2],
-      ['road-curve-intersection', -14, -14, -Math.PI / 2],
-      ['road-straight-half', -30, -22, Math.PI / 2],
+      // Auto-scaling for the city (Assume it needs to be quite large)
+      const b3 = new THREE.Box3().setFromObject(city);
+      const size = b3.getSize(new THREE.Vector3());
+      const targetWidth = 140; // Total world size
+      const scale = targetWidth / Math.max(size.x, size.z);
+      city.scale.setScalar(scale);
       
-      // B Site & Long
-      ['road-side-entry', 24, -18, -Math.PI / 2],
-      ['road-bridge', 32, -6, 0],
-      ['road-curve-intersection', 20, -28, 0],
-      ['road-split', 10, -24, Math.PI / 2],
-      ['road-straight', 32, -22, 0],
-      ['road-end-round', 32, -34, 0],
-      
-      // Additional Dressing (Using tiles as flat ground bases)
-      ['road-square', -30, -10, 0], // A Site pad
-      ['road-square', 30, -18, 0],  // B Site pad
-    ];
-    roadTiles.forEach(([name, x, z, rot = 0]) => placeMapAsset(name, x, z, rot, 10, 0.024));
+      // Center the city at origin
+      b3.setFromObject(city);
+      const center = b3.getCenter(new THREE.Vector3());
+      city.position.x -= center.x;
+      city.position.z -= center.z;
+      city.position.y -= b3.min.y; // Rest on floor
 
-    const kitProps: Array<[string, number, number, number?, number?]> = [
-      // --- T SPAWN & MID CONNECTOR ---
-      ['construction-barrier', -14, -24, Math.PI / 2, 8.8],
-      ['construction-barrier', -14, -30, Math.PI / 2, 8.8],
-      ['bridge-pillar-wide', -14, -36, 0, 10.5],
-      ['light-curved-double', -20, -38, 0, 10.5],
-      
-      // --- MID ---
-      ['bridge-pillar-wide', 4, -22, Math.PI / 2, 10.5],
-      ['bridge-pillar-wide', -4, -14, Math.PI / 2, 10.5],
-      ['construction-barrier', 12, -18, -Math.PI / 4, 8.8],
-      ['sign-highway-detailed', 4, 0, 0, 9.8],
-      ['light-square-cross', 4, -10, 0, 10.5],
-      
-      // --- A SITE ---
-      ['bridge-pillar-wide', -22, -10, 0, 10.5],
-      ['bridge-pillar-wide', -38, -10, 0, 10.5],
-      ['construction-barrier', -30, -6, 0, 8.8],
-      ['construction-barrier', -30, -14, 0, 8.8],
-      ['road-slant-barrier', -34, -10, Math.PI / 2, 10.5],
-      ['light-square', -30, -2, 0, 10.5],
-      ['construction-cone', -26, -12, 0, 8.8],
-      ['construction-cone', -34, -8, 0, 8.8],
-      
-      // --- B SITE ---
-      ['bridge-pillar-wide', 30, -6, 0, 10.5],
-      ['bridge-pillar-wide', 38, -6, 0, 10.5],
-      ['road-slant-barrier', 26, -18, Math.PI / 2, 10.5],
-      ['construction-barrier', 34, -18, Math.PI / 2, 8.8],
-      ['construction-barrier', 34, -22, Math.PI / 2, 8.8],
-      ['light-curved-double', 34, -2, -Math.PI / 2, 10.5],
-      ['construction-cone', 28, -20, 0, 8.8],
-      ['sign-highway-wide', 30, -28, Math.PI, 10.5],
+      scene.add(city);
 
-      // --- CT SPAWN & ROTATION ---
-      ['bridge-pillar-wide', 16, 16, 0, 10.5],
-      ['construction-barrier', 16, 22, 0, 8.8],
-      ['construction-barrier', 24, 16, Math.PI / 2, 8.8],
-      ['sign-highway-detailed', 10, 26, 0, 9.8],
-      ['light-curved-double', 24, 30, 0, 10.5],
-      ['construction-cone', 20, 20, 0, 8.8],
-    ];
-    kitProps.forEach(([name, x, z, rot = 0, scale = 10]) => placeMapAsset(name, x, z, rot, scale, 0.04, true));
+      // Granular Collider Generation
+      city.traverse((child) => {
+        if ((child as THREE.Mesh).isMesh) {
+          const mesh = child as THREE.Mesh;
+          const box = new THREE.Box3().setFromObject(mesh);
+          // Only add colliders for substantial vertical objects (walls/crates/buildings)
+          const mSize = box.getSize(new THREE.Vector3());
+          if (mSize.y > 0.5 && mSize.x > 0.1 && mSize.z > 0.1) {
+             colliders.push({ min: box.min.clone(), max: box.max.clone() });
+             minimapWalls.push({ 
+               x: (box.min.x + box.max.x)/2, 
+               z: (box.min.z + box.max.z)/2, 
+               w: mSize.x, 
+               d: mSize.z 
+             });
+          }
+        }
+      });
+      setMapLoaded(true);
+      mapLoadedRef.current = true;
+    });
 
     // ─── WEAPONS ────────────────────────────────────────────────────────────────
     // Using WEAPONS from WeaponData.ts
@@ -1040,6 +985,10 @@ export default function Game() {
     ];
 
     function configureBots(){
+      if (!mapLoadedRef.current) {
+        scheduleTimeout(configureBots, 200);
+        return;
+      }
       let neededCT = 5;
       let neededT = 5;
       
@@ -2694,6 +2643,10 @@ export default function Game() {
   const isCT = chosenTeam === 'CT';
 
   function handleEnterMatch(isMulti = false) {
+    if (!mapLoaded) {
+      alert("Map still loading... please wait a few seconds.");
+      return;
+    }
     const name = username.trim() || 'Player';
     playerNameRef.current = name;
     isMultiplayerRef.current = isMulti;
