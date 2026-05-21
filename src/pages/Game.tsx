@@ -242,7 +242,7 @@ export default function Game() {
     let activeViewWeaponId = '';
     let activeViewTeam: Team = 'CT';
 
-    const remotePlayers = new Map<string, { obj: THREE.Group, body: THREE.Mesh, head: THREE.Object3D, weaponMount: THREE.Group, targetPos: THREE.Vector3, targetYaw: number, targetPitch: number, team: string, name: string, hp: number, weapon: string }>();
+    const remotePlayers = new Map<string, { obj: THREE.Group, body: THREE.Mesh, head: THREE.Object3D, weaponMount: THREE.Group, targetPos: THREE.Vector3, targetYaw: number, targetPitch: number, team: string, name: string, hp: number, weapon: string, mixer: THREE.AnimationMixer | null }>();
 
     roomManager.onNetworkEvent((event) => {
       if (event.type === 'PLAYER_UPDATE') {
@@ -255,6 +255,7 @@ export default function Game() {
           scene.add(model.group);
           const newRemote = { 
             obj: model.group, body: model.body, head: model.head, weaponMount: model.weaponMount,
+            mixer: (model as any).mixer as THREE.AnimationMixer | null,
             targetPos: new THREE.Vector3(data.pos.x, data.pos.y - 1.55, data.pos.z),
             targetYaw: data.yaw, targetPitch: data.pitch,
             team: data.team, name: data.name, hp: data.hp, weapon: data.weapon
@@ -315,6 +316,8 @@ export default function Game() {
         
         const pitchDiff = remote.targetPitch - remote.head.rotation.x;
         remote.head.rotation.x += pitchDiff * 0.2;
+
+        if (remote.mixer) remote.mixer.update(dt);
       });
     }
 
@@ -651,6 +654,7 @@ export default function Game() {
       stepNoiseCd:0,
       kills:0, deaths:0,
       shooting: false,
+      mixer: null as THREE.AnimationMixer | null,
     };
     const state: any = {
       started:false, round:1, ctScore:0, tScore:0, maxRounds:15,
@@ -790,28 +794,32 @@ export default function Game() {
       else if(state.started&&player.alive) requestAimLock();
     }
 
-    // ─── BOT MODELS ─────────────────────────────────────────────────────────────
     function createBotModel(team:string, weaponId:string){
       const isCT = team==='CT';
       const g = new THREE.Group();
+      const res: any = { group: g, body: null, head: null, weaponMount: null, mixer: null };
 
       // INVISIBLE HITBOXES (For physics and shooting logic)
       const hitBoxMat = new THREE.MeshBasicMaterial({ visible: false });
       const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.32,0.62,5,12), hitBoxMat); 
       torso.position.y=1.0; 
       g.add(torso);
+      res.body = torso;
       
-      const head = new THREE.Group(); 
-      head.position.set(0,1.60,0.05); 
-      g.add(head);
+      const headGroup = new THREE.Group(); 
+      headGroup.position.set(0,1.60,0.05); 
+      g.add(headGroup);
+      res.head = headGroup;
       const faceHitbox = new THREE.Mesh(new THREE.SphereGeometry(0.18,12,12), hitBoxMat); 
       faceHitbox.position.set(0,0.08,0); 
-      head.add(faceHitbox);
+      headGroup.add(faceHitbox);
 
-      // WEAPON MOUNT (Matches old programmatic scale so guns fit)
+      // WEAPON MOUNT (Initially static, will be parented to bone once loaded)
       const weaponMount = new THREE.Group(); 
       weaponMount.position.set(0.18,0.98,0.28); 
       g.add(weaponMount);
+      res.weaponMount = weaponMount;
+
       const worldWeapon = createWeaponModel(weaponId,'world', team as Team);
       worldWeapon.group.rotation.set(0,-Math.PI/2,Math.PI/2);
       worldWeapon.group.position.set(0,0.02,0.2); 
@@ -828,7 +836,6 @@ export default function Game() {
           if ((child as THREE.Mesh).isMesh) {
             child.castShadow = true;
             child.receiveShadow = true;
-            // Fix color space for materials
             const mat = (child as THREE.Mesh).material;
             if (mat && !Array.isArray(mat) && (mat as THREE.MeshStandardMaterial).map) {
               (mat as THREE.MeshStandardMaterial).map!.colorSpace = THREE.SRGBColorSpace;
@@ -836,31 +843,52 @@ export default function Game() {
           }
         });
 
-        // Fit to 1.8 unit height bounding box
+        // Bone-parenting for weapons ("Rigging")
+        // Search for common hand bone names in rigged models
+        const hand = model.getObjectByName('mixamorig_RightHand') || 
+                     model.getObjectByName('Hand_R') || 
+                     model.getObjectByName('RightHand') ||
+                     model.getObjectByName('Bip01_R_Hand');
+        
+        if (hand) {
+          hand.add(weaponMount);
+          // Reset relative position to hand bone (tweakable based on specific model)
+          weaponMount.position.set(0, 0, 0); 
+          weaponMount.rotation.set(Math.PI/2, 0, -Math.PI/2);
+          weaponMount.scale.setScalar(2.2); // Adjust scale back to world space since bone might be scaled
+        }
+
+        // Animation System
+        if (gltf.animations && gltf.animations.length > 0) {
+          const mixer = new THREE.AnimationMixer(model);
+          res.mixer = mixer;
+          // Look for 'Idle' or 'Walking' animations
+          const idleAnim = gltf.animations.find(a => a.name.toLowerCase().includes('idle')) || gltf.animations[0];
+          if (idleAnim) {
+            const action = mixer.clipAction(idleAnim);
+            action.play();
+          }
+        }
+
+        // Scale and Center
         const box = new THREE.Box3().setFromObject(model);
         const size = box.getSize(new THREE.Vector3());
-        // Scale to a standard human height of ~1.75
-        const targetHeight = 1.75;
+        const targetHeight = 1.82;
         const scale = targetHeight / size.y;
         model.scale.setScalar(scale);
 
-        // Center on X and Z, set Y to rest on floor
         box.setFromObject(model);
         const center = box.getCenter(new THREE.Vector3());
         model.position.x = -center.x;
         model.position.z = -center.z;
         model.position.y = -box.min.y;
 
-        // Tweak specific model offsets if they are facing the wrong way
-        if (modelName === 'sas__cs2_agent_model_blue') {
-           // Might need rotation if T-pose faces Z instead of -Z
-           model.rotation.y = Math.PI; 
-        }
+        if (isCT) model.rotation.y = Math.PI; 
 
         g.add(model);
       });
 
-      return {group:g, body:torso, head, weaponMount};
+      return res;
     }
 
     // ─── BOT SYSTEM ─────────────────────────────────────────────────────────────
@@ -886,6 +914,7 @@ export default function Game() {
       return {
         id: 'bot-' + Math.random().toString(36).substr(2, 9),
         obj:model.group, body:model.body, head:model.head, weaponMount:model.weaponMount,
+        mixer: (model as any).mixer as THREE.AnimationMixer | null,
         team, name, role, hp:100, armor:weaponId==='glock'?0:100, helmet:weaponId!=='glock',
         alive:true, weapon:weaponId, ammoMag:WEAPONS[weaponId].magSize, reloadT:0,
         kills:0, deaths:0,
@@ -2556,7 +2585,11 @@ export default function Game() {
             updateRound(dt);
           }
           updatePlayer(dt);
-          for(const b of bots)updateBot(b,dt);
+          if (player.mixer) player.mixer.update(dt);
+          for(const b of bots){
+            updateBot(b,dt);
+            if (b.mixer) b.mixer.update(dt);
+          }
           updateDroppedWeapons(dt);
           updateHUD();
           
