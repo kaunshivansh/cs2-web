@@ -119,8 +119,10 @@ export class RoomManager {
         this.addPlayerToRoom(conn.peer, data.name);
       } else if (data.type === 'PLAYER_UPDATE') {
         this.updatePlayerData(conn.peer, data.player);
+        this.onEvent(data); // Fire locally for host
         this.broadcast(data, [conn.peer]); // Relay to others, except sender
       } else if (data.type === 'ACTION') {
+        this.onEvent(data); // Fire locally for host
         this.broadcast(data, [conn.peer]);
       } else if (data.type === 'REQUEST_TEAM') {
         this.handleTeamRequest(conn.peer, data.team);
@@ -260,6 +262,7 @@ export class RoomManager {
   }
 
   public getMyId() { return this.peer?.id; }
+  public getState() { return this.state; }
 }
 
 export const roomManager = new RoomManager();
