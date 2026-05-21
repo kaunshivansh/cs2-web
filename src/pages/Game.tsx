@@ -48,6 +48,7 @@ export default function Game() {
   const [isHost, setIsHost] = useState(false);
   const [peerId, setPeerId] = useState('');
   const [mapLoaded, setMapLoaded] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState(0);
   const mapLoadedRef = useRef(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -531,47 +532,87 @@ export default function Game() {
     siteMarker('A',A_SITE.x,A_SITE.z,'#dc8a66');
     siteMarker('B',B_SITE.x,B_SITE.z,'#dc8a66');
 
-    // LOAD CITY MAP
-    gltfLoader.load('/assets/models/city.glb', (gltf) => {
-      const city = gltf.scene;
-      prepLoadedMapAsset(city);
-      
-      const b3 = new THREE.Box3().setFromObject(city);
-      const size = b3.getSize(new THREE.Vector3());
-      city.scale.setScalar(140 / Math.max(size.x, size.z));
-      
-      b3.setFromObject(city);
-      const center = b3.getCenter(new THREE.Vector3());
-      city.position.x -= center.x;
-      city.position.z -= center.z;
-      city.position.y -= b3.min.y;
-      scene.add(city);
+    // LOAD CITY MAP (With persistent browser caching)
+    const CACHE_NAME = 'cs2-web-assets-v1';
+    const MAP_URL = '/assets/models/city.glb';
 
-      // Optimized Collider Generation (Flattened loop is faster than recursive traverse for large maps)
-      const meshes: THREE.Mesh[] = [];
-      city.traverse(o => { if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh); });
-      
-      meshes.forEach((mesh) => {
-        const box = new THREE.Box3().setFromObject(mesh);
-        const mSize = box.getSize(new THREE.Vector3());
-        if (mSize.y > 0.5 && mSize.x > 0.1 && mSize.z > 0.1) {
-           colliders.push({ min: box.min.clone(), max: box.max.clone() });
-           minimapWalls.push({ 
-             x: (box.min.x + box.max.x)/2, 
-             z: (box.min.z + box.max.z)/2, 
-             w: mSize.x, 
-             d: mSize.z 
-           });
+    async function fetchAndCacheMap() {
+      setLoadingProgress(1);
+      try {
+        const cache = await caches.open(CACHE_NAME);
+        let response = await cache.match(MAP_URL);
+        
+        if (!response) {
+          console.log("Map not in cache, downloading...");
+          response = await fetch(MAP_URL);
+          // Only cache if successful
+          if (response.ok) await cache.put(MAP_URL, response.clone());
+        } else {
+          console.log("Loading map from browser cache...");
         }
-      });
-      console.log(`City loaded with ${colliders.length} colliders.`);
-      setMapLoaded(true);
-      mapLoadedRef.current = true;
-    }, (progress) => {
-      if (progress.total > 0) {
-        console.log(`Loading map: ${Math.round(progress.loaded / progress.total * 100)}%`);
+
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        
+        gltfLoader.load(url, async (gltf) => {
+          const city = gltf.scene;
+          prepLoadedMapAsset(city);
+          
+          const b3 = new THREE.Box3().setFromObject(city);
+          const size = b3.getSize(new THREE.Vector3());
+          city.scale.setScalar(140 / Math.max(size.x, size.z));
+          
+          b3.setFromObject(city);
+          const center = b3.getCenter(new THREE.Vector3());
+          city.position.x -= center.x;
+          city.position.z -= center.z;
+          city.position.y -= b3.min.y;
+          scene.add(city);
+
+          // Async Collider Generation
+          const meshes: THREE.Mesh[] = [];
+          city.traverse(o => { if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh); });
+          
+          for (let i = 0; i < meshes.length; i++) {
+            const mesh = meshes[i];
+            const box = new THREE.Box3().setFromObject(mesh);
+            const mSize = box.getSize(new THREE.Vector3());
+            if (mSize.y > 0.5 && mSize.x > 0.1 && mSize.z > 0.1) {
+              colliders.push({ min: box.min.clone(), max: box.max.clone() });
+              minimapWalls.push({ 
+                x: (box.min.x + box.max.x)/2, 
+                z: (box.min.z + box.max.z)/2, 
+                w: mSize.x, 
+                d: mSize.z 
+              });
+            }
+            if (i % 80 === 0) {
+              setLoadingProgress(Math.min(99, 10 + Math.round((i / meshes.length) * 90)));
+              await new Promise(r => setTimeout(r, 0));
+            }
+          }
+
+          console.log(`City loaded with ${colliders.length} colliders.`);
+          setLoadingProgress(100);
+          setMapLoaded(true);
+          mapLoadedRef.current = true;
+          // Revoke after a long delay to be safe
+          setTimeout(() => URL.revokeObjectURL(url), 10000);
+        }, undefined, (err) => {
+           console.error("GLTFLoader error:", err);
+           setMapLoaded(true); // Attempt to proceed anyway
+        });
+      } catch (err) {
+        console.error("Cache/Loading error:", err);
+        gltfLoader.load(MAP_URL, (gltf) => {
+           scene.add(gltf.scene);
+           setMapLoaded(true);
+           mapLoadedRef.current = true;
+        });
       }
-    });
+    }
+
+    fetchAndCacheMap();
 
     // ─── WEAPONS ────────────────────────────────────────────────────────────────
     // Using WEAPONS from WeaponData.ts
@@ -2863,154 +2904,170 @@ export default function Game() {
               </h1>
             </div>
 
-            {menuState === 'mode' && (
-              <div style={{textAlign:'center'}}>
-                <div style={{marginBottom:32, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20}}>
-                  <button className="game-buybtn" style={{padding: '30px', fontSize: 18, justifyContent: 'center'}} onClick={() => setMenuState('single-setup')}>
-                    SINGLEPLAYER
-                  </button>
-                  <button className="game-buybtn" style={{padding: '30px', fontSize: 18, justifyContent: 'center'}} onClick={() => setMenuState('multi-home')}>
-                    MULTIPLAYER
-                  </button>
+            {!mapLoaded && (
+              <div style={{marginTop: 32, textAlign: 'center'}}>
+                <div style={{fontSize: 10, letterSpacing: '0.3em', color: 'rgba(255,255,255,0.4)', marginBottom: 16, textTransform: 'uppercase'}}>
+                  {loadingProgress < 100 ? 'Syncing Map Data...' : 'Generating Colliders...'}
                 </div>
-                <div style={{fontSize:10,letterSpacing:'.38em',color:'rgba(255,255,255,.34)'}}>CHOOSE YOUR EXPERIENCE</div>
+                <div style={{width: '100%', height: 6, background: 'rgba(255,255,255,0.05)', borderRadius: 3, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.05)'}}>
+                  <div style={{width: `${loadingProgress}%`, height: '100%', background: 'linear-gradient(90deg, #d9ab5a, #f5e8c8)', transition: 'width 0.4s cubic-bezier(0.1, 0, 0.2, 1)'}} />
+                </div>
+                <div style={{marginTop: 12, fontSize: 11, fontWeight: 800, color: '#f5e8c8', letterSpacing: '0.1em'}}>{loadingProgress}%</div>
               </div>
             )}
 
-            {menuState === 'single-setup' && (
-              <div style={{textAlign:'center'}}>
-                <div style={{marginBottom:20}}>
-                   <input
-                    type="text"
-                    maxLength={20}
-                    placeholder="Player Name..."
-                    value={username}
-                    onChange={e => setUsername(e.target.value)}
-                    onKeyDown={e => { if(e.key==='Enter') handleEnterMatch(); }}
-                    style={{width:'100%', maxWidth: 300, boxSizing:'border-box',background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.12)',borderRadius:12,color:'#f3eee2',fontFamily:'inherit',fontSize:14,fontWeight:600,letterSpacing:'.08em',padding:'13px 16px',outline:'none',textAlign:'center', marginBottom: 20}}
-                  />
-                </div>
-                <div style={{marginBottom: 20}}>
-                   <div style={{fontSize: 9, opacity: 0.5, letterSpacing: '0.2em', marginBottom: 10}}>SIDE PREFERENCE</div>
-                   <div style={{display: 'flex', justifyContent: 'center', gap: 10}}>
-                      <button className="game-buybtn" style={{width: 120, fontSize: 10, justifyContent: 'center', background: chosenTeam === 'CT' ? 'rgba(135,185,255,0.2)' : 'transparent', borderColor: chosenTeam === 'CT' ? '#87b9ff' : 'rgba(255,255,255,0.1)'}} onClick={() => setChosenTeam('CT')}>CT</button>
-                      <button className="game-buybtn" style={{width: 120, fontSize: 10, justifyContent: 'center', background: chosenTeam === 'T' ? 'rgba(240,163,102,0.2)' : 'transparent', borderColor: chosenTeam === 'T' ? '#f0a366' : 'rgba(255,255,255,0.1)'}} onClick={() => setChosenTeam('T')}>T</button>
-                   </div>
-                </div>
-                <button className="game-buybtn" style={{padding: '15px', justifyContent: 'center', maxWidth: 300, margin: '0 auto'}} onClick={() => handleEnterMatch(false)}>
-                  START MATCH
-                </button>
-                <div style={{marginTop: 20}}>
-                  <button style={{background:'none', border:'none', color:'rgba(255,255,255,0.4)', cursor:'pointer', fontSize:11, letterSpacing: '0.2em'}} onClick={() => setMenuState('mode')}>BACK</button>
-                </div>
-              </div>
-            )}
-
-            {menuState === 'multi-home' && (
-              <div style={{textAlign:'center'}}>
-                <div style={{marginBottom:20}}>
-                   <input
-                    type="text"
-                    maxLength={20}
-                    placeholder="Player Name..."
-                    value={username}
-                    onChange={e => setUsername(e.target.value)}
-                    style={{width:'100%', maxWidth: 300, boxSizing:'border-box',background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.12)',borderRadius:12,color:'#f3eee2',fontFamily:'inherit',fontSize:14,fontWeight:600,letterSpacing:'.08em',padding:'13px 16px',outline:'none',textAlign:'center', marginBottom: 20}}
-                  />
-                </div>
-                <div style={{marginBottom:32, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20}}>
-                  <button className="game-buybtn" style={{padding: '20px', justifyContent: 'center'}} onClick={() => setMenuState('create')}>
-                    CREATE ROOM
-                  </button>
-                  <button className="game-buybtn" style={{padding: '20px', justifyContent: 'center'}} onClick={() => setMenuState('join')}>
-                    JOIN ROOM
-                  </button>
-                </div>
-                <button style={{background:'none', border:'none', color:'rgba(255,255,255,0.4)', cursor:'pointer', fontSize:11, letterSpacing: '0.2em'}} onClick={() => setMenuState('mode')}>BACK</button>
-              </div>
-            )}
-
-            {menuState === 'create' && (
-              <div style={{textAlign:'center'}}>
-                <h3 style={{letterSpacing: '0.2em', marginBottom: 20}}>ROOM SETTINGS</h3>
-                <div style={{marginBottom:28, display: 'flex', justifyContent: 'center', gap: 20}}>
-                  <div>
-                    <label style={{display:'block', fontSize: 9, opacity: 0.5, marginBottom: 5}}>TEAM SIZE</label>
-                    <select value={roomSettings.teamSize} onChange={e => setRoomSettings({...roomSettings, teamSize: parseInt(e.target.value)})} style={{background: '#1a1e24', color: '#fff', border: '1px solid #333', padding: '10px', borderRadius: 8}}>
-                      {[1,2,3,4,5].map(n => <option key={n} value={n}>{n}v{n}</option>)}
-                    </select>
+            {mapLoaded && (
+              <>
+                {menuState === 'mode' && (
+                  <div style={{textAlign:'center'}}>
+                    <div style={{marginBottom:32, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20}}>
+                      <button className="game-buybtn" style={{padding: '30px', fontSize: 18, justifyContent: 'center'}} onClick={() => setMenuState('single-setup')}>
+                        SINGLEPLAYER
+                      </button>
+                      <button className="game-buybtn" style={{padding: '30px', fontSize: 18, justifyContent: 'center'}} onClick={() => setMenuState('multi-home')}>
+                        MULTIPLAYER
+                      </button>
+                    </div>
+                    <div style={{fontSize:10,letterSpacing:'.38em',color:'rgba(255,255,255,.34)'}}>CHOOSE YOUR EXPERIENCE</div>
                   </div>
-                  <div>
-                    <label style={{display:'block', fontSize: 9, opacity: 0.5, marginBottom: 5}}>MAX ROUNDS</label>
-                    <select value={roomSettings.maxRounds} onChange={e => setRoomSettings({...roomSettings, maxRounds: parseInt(e.target.value)})} style={{background: '#1a1e24', color: '#fff', border: '1px solid #333', padding: '10px', borderRadius: 8}}>
-                      {[5,10,15,30].map(n => <option key={n} value={n}>{n} Rounds</option>)}
-                    </select>
-                  </div>
-                </div>
-                <button className="game-buybtn" style={{padding: '15px', justifyContent: 'center', maxWidth: 300, margin: '0 auto'}} onClick={onCreateRoom}>
-                  CREATE
-                </button>
-                <div style={{marginTop: 20}}>
-                  <button style={{background:'none', border:'none', color:'rgba(255,255,255,0.4)', cursor:'pointer', fontSize:11, letterSpacing: '0.2em'}} onClick={() => setMenuState('multi-home')}>BACK</button>
-                </div>
-              </div>
-            )}
-
-            {menuState === 'join' && (
-              <div style={{textAlign:'center'}}>
-                <h3 style={{letterSpacing: '0.2em', marginBottom: 20}}>ENTER ROOM CODE</h3>
-                <input
-                  type="text"
-                  placeholder="Code..."
-                  value={roomCode}
-                  onChange={e => setRoomCode(e.target.value)}
-                  style={{width:'100%', maxWidth: 300, boxSizing:'border-box',background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.12)',borderRadius:12,color:'#f3eee2',fontFamily:'inherit',fontSize:14,fontWeight:600,letterSpacing:'.08em',padding:'13px 16px',outline:'none',textAlign:'center', marginBottom: 20}}
-                />
-                <button className="game-buybtn" style={{padding: '15px', justifyContent: 'center', maxWidth: 300, margin: '0 auto'}} onClick={onJoinRoom}>
-                  JOIN
-                </button>
-                <div style={{marginTop: 20}}>
-                  <button style={{background:'none', border:'none', color:'rgba(255,255,255,0.4)', cursor:'pointer', fontSize:11, letterSpacing: '0.2em'}} onClick={() => setMenuState('multi-home')}>BACK</button>
-                </div>
-              </div>
-            )}
-
-            {menuState === 'lobby' && (
-              <div style={{textAlign:'center'}}>
-                <div style={{background: 'rgba(0,0,0,0.3)', padding: '20px', borderRadius: 16, marginBottom: 20}}>
-                  <div style={{fontSize: 10, opacity: 0.5, letterSpacing: '0.2em'}}>ROOM CODE</div>
-                  <div style={{fontSize: 24, fontWeight: 800, color: '#f4d89a'}}>{roomCode || 'Connecting...'}</div>
-                </div>
-
-                <div style={{marginBottom: 24}}>
-                  <div style={{fontSize: 9, opacity: 0.5, letterSpacing: '0.2em', marginBottom: 10}}>SWITCH TEAM</div>
-                  <div style={{display: 'flex', justifyContent: 'center', gap: 10}}>
-                    <button className="game-buybtn" style={{width: 100, fontSize: 10, justifyContent: 'center', background: 'rgba(135,185,255,0.1)', borderColor: 'rgba(135,185,255,0.3)'}} onClick={() => roomManager.requestTeam('CT')}>CT</button>
-                    <button className="game-buybtn" style={{width: 100, fontSize: 10, justifyContent: 'center', background: 'rgba(240,163,102,0.1)', borderColor: 'rgba(240,163,102,0.3)'}} onClick={() => roomManager.requestTeam('T')}>T</button>
-                    <button className="game-buybtn" style={{width: 100, fontSize: 10, justifyContent: 'center'}} onClick={() => roomManager.requestTeam('Spectator')}>SPEC</button>
-                  </div>
-                </div>
-                
-                <div style={{textAlign: 'left', marginBottom: 20}}>
-                   <div style={{fontSize: 9, opacity: 0.5, letterSpacing: '0.2em', marginBottom: 10}}>PLAYERS ({networkPlayers.length})</div>
-                   <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10}}>
-                      {networkPlayers.map(p => (
-                        <div key={p.id} style={{background: 'rgba(255,255,255,0.05)', padding: '10px 15px', borderRadius: 10, display: 'flex', justifyContent: 'space-between', border: p.id === roomManager.getMyId() ? '1px solid #f4d89a' : '1px solid transparent'}}>
-                          <span>{p.name} {p.isHost ? '👑' : ''}</span>
-                          <span style={{fontSize: 10, opacity: 0.6, color: p.team === 'CT' ? '#87b9ff' : p.team === 'T' ? '#f0a366' : '#fff'}}>{p.team.toUpperCase()}</span>
-                        </div>
-                      ))}
-                   </div>
-                </div>
-
-                {isHost ? (
-                  <button className="game-buybtn" style={{padding: '15px', justifyContent: 'center', maxWidth: 300, margin: '0 auto', background: 'linear-gradient(180deg,#92d7a3,#4caf50)', color: '#000'}} onClick={onStartMultiplayerMatch}>
-                    START MATCH
-                  </button>
-                ) : (
-                  <div style={{fontSize: 12, letterSpacing: '0.1em', opacity: 0.8}}>Waiting for host to start...</div>
                 )}
-              </div>
+
+                {menuState === 'single-setup' && (
+                  <div style={{textAlign:'center'}}>
+                    <div style={{marginBottom:20}}>
+                       <input
+                        type="text"
+                        maxLength={20}
+                        placeholder="Player Name..."
+                        value={username}
+                        onChange={e => setUsername(e.target.value)}
+                        onKeyDown={e => { if(e.key==='Enter') handleEnterMatch(false); }}
+                        style={{width:'100%', maxWidth: 300, boxSizing:'border-box',background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.12)',borderRadius:12,color:'#f3eee2',fontFamily:'inherit',fontSize:14,fontWeight:600,letterSpacing:'.08em',padding:'13px 16px',outline:'none',textAlign:'center', marginBottom: 20}}
+                      />
+                    </div>
+                    <div style={{marginBottom: 20}}>
+                       <div style={{fontSize: 9, opacity: 0.5, letterSpacing: '0.2em', marginBottom: 10}}>SIDE PREFERENCE</div>
+                       <div style={{display: 'flex', justifyContent: 'center', gap: 10}}>
+                          <button className="game-buybtn" style={{width: 120, fontSize: 10, justifyContent: 'center', background: chosenTeam === 'CT' ? 'rgba(135,185,255,0.2)' : 'transparent', borderColor: chosenTeam === 'CT' ? '#87b9ff' : 'rgba(255,255,255,0.1)'}} onClick={() => setChosenTeam('CT')}>CT</button>
+                          <button className="game-buybtn" style={{width: 120, fontSize: 10, justifyContent: 'center', background: chosenTeam === 'T' ? 'rgba(240,163,102,0.2)' : 'transparent', borderColor: chosenTeam === 'T' ? '#f0a366' : 'rgba(255,255,255,0.1)'}} onClick={() => setChosenTeam('T')}>T</button>
+                       </div>
+                    </div>
+                    <button className="game-buybtn" style={{padding: '15px', justifyContent: 'center', maxWidth: 300, margin: '0 auto'}} onClick={() => handleEnterMatch(false)}>
+                      START MATCH
+                    </button>
+                    <div style={{marginTop: 20}}>
+                      <button style={{background:'none', border:'none', color:'rgba(255,255,255,0.4)', cursor:'pointer', fontSize:11, letterSpacing: '0.2em'}} onClick={() => setMenuState('mode')}>BACK</button>
+                    </div>
+                  </div>
+                )}
+
+                {menuState === 'multi-home' && (
+                  <div style={{textAlign:'center'}}>
+                    <div style={{marginBottom:20}}>
+                       <input
+                        type="text"
+                        maxLength={20}
+                        placeholder="Player Name..."
+                        value={username}
+                        onChange={e => setUsername(e.target.value)}
+                        style={{width:'100%', maxWidth: 300, boxSizing:'border-box',background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.12)',borderRadius:12,color:'#f3eee2',fontFamily:'inherit',fontSize:14,fontWeight:600,letterSpacing:'.08em',padding:'13px 16px',outline:'none',textAlign:'center', marginBottom: 20}}
+                      />
+                    </div>
+                    <div style={{marginBottom:32, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20}}>
+                      <button className="game-buybtn" style={{padding: '20px', justifyContent: 'center'}} onClick={() => setMenuState('create')}>
+                        CREATE ROOM
+                      </button>
+                      <button className="game-buybtn" style={{padding: '20px', justifyContent: 'center'}} onClick={() => setMenuState('join')}>
+                        JOIN ROOM
+                      </button>
+                    </div>
+                    <button style={{background:'none', border:'none', color:'rgba(255,255,255,0.4)', cursor:'pointer', fontSize:11, letterSpacing: '0.2em'}} onClick={() => setMenuState('mode')}>BACK</button>
+                  </div>
+                )}
+
+                {menuState === 'create' && (
+                  <div style={{textAlign:'center'}}>
+                    <h3 style={{letterSpacing: '0.2em', marginBottom: 20}}>ROOM SETTINGS</h3>
+                    <div style={{marginBottom:28, display: 'flex', justifyContent: 'center', gap: 20}}>
+                      <div>
+                        <label style={{display:'block', fontSize: 9, opacity: 0.5, marginBottom: 5}}>TEAM SIZE</label>
+                        <select value={roomSettings.teamSize} onChange={e => setRoomSettings({...roomSettings, teamSize: parseInt(e.target.value)})} style={{background: '#1a1e24', color: '#fff', border: '1px solid #333', padding: '10px', borderRadius: 8}}>
+                          {[1,2,3,4,5].map(n => <option key={n} value={n}>{n}v{n}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{display:'block', fontSize: 9, opacity: 0.5, marginBottom: 5}}>MAX ROUNDS</label>
+                        <select value={roomSettings.maxRounds} onChange={e => setRoomSettings({...roomSettings, maxRounds: parseInt(e.target.value)})} style={{background: '#1a1e24', color: '#fff', border: '1px solid #333', padding: '10px', borderRadius: 8}}>
+                          {[5,10,15,30].map(n => <option key={n} value={n}>{n} Rounds</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <button className="game-buybtn" style={{padding: '15px', justifyContent: 'center', maxWidth: 300, margin: '0 auto'}} onClick={onCreateRoom}>
+                      CREATE
+                    </button>
+                    <div style={{marginTop: 20}}>
+                      <button style={{background:'none', border:'none', color:'rgba(255,255,255,0.4)', cursor:'pointer', fontSize:11, letterSpacing: '0.2em'}} onClick={() => setMenuState('multi-home')}>BACK</button>
+                    </div>
+                  </div>
+                )}
+
+                {menuState === 'join' && (
+                  <div style={{textAlign:'center'}}>
+                    <h3 style={{letterSpacing: '0.2em', marginBottom: 20}}>ENTER ROOM CODE</h3>
+                    <input
+                      type="text"
+                      placeholder="Code..."
+                      value={roomCode}
+                      onChange={e => setRoomCode(e.target.value)}
+                      style={{width:'100%', maxWidth: 300, boxSizing:'border-box',background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.12)',borderRadius:12,color:'#f3eee2',fontFamily:'inherit',fontSize:14,fontWeight:600,letterSpacing:'.08em',padding:'13px 16px',outline:'none',textAlign:'center', marginBottom: 20}}
+                    />
+                    <button className="game-buybtn" style={{padding: '15px', justifyContent: 'center', maxWidth: 300, margin: '0 auto'}} onClick={onJoinRoom}>
+                      JOIN
+                    </button>
+                    <div style={{marginTop: 20}}>
+                      <button style={{background:'none', border:'none', color:'rgba(255,255,255,0.4)', cursor:'pointer', fontSize:11, letterSpacing: '0.2em'}} onClick={() => setMenuState('multi-home')}>BACK</button>
+                    </div>
+                  </div>
+                )}
+
+                {menuState === 'lobby' && (
+                  <div style={{textAlign:'center'}}>
+                    <div style={{background: 'rgba(0,0,0,0.3)', padding: '20px', borderRadius: 16, marginBottom: 20}}>
+                      <div style={{fontSize: 10, opacity: 0.5, letterSpacing: '0.2em'}}>ROOM CODE</div>
+                      <div style={{fontSize: 24, fontWeight: 800, color: '#f4d89a'}}>{roomCode || 'Connecting...'}</div>
+                    </div>
+
+                    <div style={{marginBottom: 24}}>
+                      <div style={{fontSize: 9, opacity: 0.5, letterSpacing: '0.2em', marginBottom: 10}}>SWITCH TEAM</div>
+                      <div style={{display: 'flex', justifyContent: 'center', gap: 10}}>
+                        <button className="game-buybtn" style={{width: 100, fontSize: 10, justifyContent: 'center', background: 'rgba(135,185,255,0.1)', borderColor: 'rgba(135,185,255,0.3)'}} onClick={() => roomManager.requestTeam('CT')}>CT</button>
+                        <button className="game-buybtn" style={{width: 100, fontSize: 10, justifyContent: 'center', background: 'rgba(240,163,102,0.1)', borderColor: 'rgba(240,163,102,0.3)'}} onClick={() => roomManager.requestTeam('T')}>T</button>
+                        <button className="game-buybtn" style={{width: 100, fontSize: 10, justifyContent: 'center'}} onClick={() => roomManager.requestTeam('Spectator')}>SPEC</button>
+                      </div>
+                    </div>
+                    
+                    <div style={{textAlign: 'left', marginBottom: 20}}>
+                       <div style={{fontSize: 9, opacity: 0.5, letterSpacing: '0.2em', marginBottom: 10}}>PLAYERS ({networkPlayers.length})</div>
+                       <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10}}>
+                          {networkPlayers.map(p => (
+                            <div key={p.id} style={{background: 'rgba(255,255,255,0.05)', padding: '10px 15px', borderRadius: 10, display: 'flex', justifyContent: 'space-between', border: p.id === roomManager.getMyId() ? '1px solid #f4d89a' : '1px solid transparent'}}>
+                              <span>{p.name} {p.isHost ? '👑' : ''}</span>
+                              <span style={{fontSize: 10, opacity: 0.6, color: p.team === 'CT' ? '#87b9ff' : p.team === 'T' ? '#f0a366' : '#fff'}}>{p.team.toUpperCase()}</span>
+                            </div>
+                          ))}
+                       </div>
+                    </div>
+
+                    {isHost ? (
+                      <button className="game-buybtn" style={{padding: '15px', justifyContent: 'center', maxWidth: 300, margin: '0 auto', background: 'linear-gradient(180deg,#92d7a3,#4caf50)', color: '#000'}} onClick={onStartMultiplayerMatch}>
+                        START MATCH
+                      </button>
+                    ) : (
+                      <div style={{fontSize: 12, letterSpacing: '0.1em', opacity: 0.8}}>Waiting for host to start...</div>
+                    )}
+                  </div>
+                )}
+              </>
             )}
 
           </div>
