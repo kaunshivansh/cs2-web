@@ -49,6 +49,7 @@ export default function Game() {
   const [peerId, setPeerId] = useState('');
   const [mapLoaded, setMapLoaded] = useState(false);
   const [loadingProgress, setLoadingProgress] = useState(0);
+  const [loadingStatus, setLoadingStatus] = useState('CONNECTING');
   const mapLoadedRef = useRef(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -537,6 +538,7 @@ export default function Game() {
     const MAP_URL = '/assets/models/city.glb';
     async function processCityModel(city: THREE.Group) {
       if (!city) return;
+      setLoadingStatus('PREPARING GEOMETRY');
       prepLoadedMapAsset(city);
       const b3 = new THREE.Box3().setFromObject(city);
       const size = b3.getSize(new THREE.Vector3());
@@ -544,19 +546,46 @@ export default function Game() {
       b3.setFromObject(city); const center = b3.getCenter(new THREE.Vector3());
       city.position.x -= center.x; city.position.z -= center.z; city.position.y -= b3.min.y;
       scene.add(city);
+
       const meshes: THREE.Mesh[] = [];
-      city.traverse(o => { if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh); });
+      city.traverse(o => { if ((o as THREE.Mesh).isMesh) { (o as THREE.Mesh).geometry.computeBoundingBox(); meshes.push(o as THREE.Mesh); } });
+      
+      setLoadingStatus('BUILDING PHYSICS');
+      const tempB3 = new THREE.Box3();
+      const vSize = new THREE.Vector3();
+
       for (let i = 0; i < meshes.length; i++) {
-        const mesh = meshes[i]; const box = new THREE.Box3().setFromObject(mesh); const mSize = box.getSize(new THREE.Vector3());
-        if (mSize.y > 0.4 && mSize.x > 0.05 && mSize.z > 0.05) {
-          colliders.push({ min: box.min.clone(), max: box.max.clone() });
-          minimapWalls.push({ x:(box.min.x+box.max.x)/2, z:(box.min.z+box.max.z)/2, w:mSize.x, d:mSize.z });
+        const mesh = meshes[i];
+        if (!mesh.geometry.boundingBox) continue;
+        
+        tempB3.copy(mesh.geometry.boundingBox).applyMatrix4(mesh.matrixWorld);
+        tempB3.getSize(vSize);
+        
+        if (vSize.y > 0.4 && vSize.x > 0.05 && vSize.z > 0.05) {
+          colliders.push({ min: tempB3.min.clone(), max: tempB3.max.clone() });
+          minimapWalls.push({ x:(tempB3.min.x+tempB3.max.x)/2, z:(tempB3.min.z+tempB3.max.z)/2, w:vSize.x, d:vSize.z });
         }
-        if (i % 100 === 0) { setLoadingProgress(10 + Math.round((i/meshes.length)*90)); await new Promise(r=>setTimeout(r,0)); }
+        
+        if (i % 400 === 0) {
+          setLoadingProgress(20 + Math.round((i/meshes.length)*80));
+          await new Promise(r=>setTimeout(r,0));
+        }
       }
+      setLoadingStatus('READY');
       setLoadingProgress(100); setMapLoaded(true); mapLoadedRef.current = true;
     }
-    gltfLoader.load(MAP_URL, (gltf) => processCityModel(gltf.scene), (p)=>{ if(p.total)setLoadingProgress(Math.round((p.loaded/p.total)*10)); }, (e)=>{ console.error(e); });
+
+    gltfLoader.load(MAP_URL, (gltf) => {
+      processCityModel(gltf.scene);
+    }, (p) => {
+      setLoadingStatus('DOWNLOADING MAP (8MB)');
+      if (p.total) setLoadingProgress(Math.min(20, Math.round((p.loaded / p.total) * 20)));
+      else setLoadingProgress(10);
+    }, (e) => {
+      console.error(e); 
+      setLoadingStatus('LOAD FAILED');
+      setMapLoaded(true); mapLoadedRef.current=true; 
+    });
 
     // ─── WEAPONS ────────────────────────────────────────────────────────────────
     // Using WEAPONS from WeaponData.ts
@@ -2833,7 +2862,7 @@ export default function Game() {
             {!mapLoaded && (
               <div style={{marginTop: 32, textAlign: 'center'}}>
                 <div style={{fontSize: 10, letterSpacing: '0.3em', color: 'rgba(255,255,255,0.4)', marginBottom: 16, textTransform: 'uppercase'}}>
-                  {loadingProgress < 100 ? 'Syncing Map Data...' : 'Generating Colliders...'}
+                  {loadingStatus}
                 </div>
                 <div style={{width: '100%', height: 6, background: 'rgba(255,255,255,0.05)', borderRadius: 3, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.05)'}}>
                   <div style={{width: `${loadingProgress}%`, height: '100%', background: 'linear-gradient(90deg, #d9ab5a, #f5e8c8)', transition: 'width 0.4s cubic-bezier(0.1, 0, 0.2, 1)'}} />
