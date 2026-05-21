@@ -33,10 +33,6 @@ import { WEAPONS } from '../weapons/WeaponData';
 import { roomManager, type RoomState, type NetworkPlayer } from '../networking/RoomManager';
 import { MAP_MANIFEST } from '../maps/MapManifest';
 
-const MAP_NAME = 'HARBOR EXCHANGE';
-const MAP_RADAR_NAME = 'HARBOR';
-const MAP_TAGLINE = 'Tactical FPS · Harbor Terminal · Round-Based 5v5';
-
 export default function Game() {
   const [webglError, setWebglError] = useState(false);
   const [lobbyOpen, setLobbyOpen] = useState(true);
@@ -44,7 +40,12 @@ export default function Game() {
   const [username, setUsername] = useState('');
   const [chosenTeam, setChosenTeam] = useState<Team>('CT');
   const [roomCode, setRoomCode] = useState('');
-  const [roomSettings, setRoomSettings] = useState({ teamSize: 5, maxRounds: 15 });
+  const [roomSettings, setRoomSettings] = useState({ teamSize: 5, maxRounds: 15, map: 'harbor-industrial' });
+  const [singleplayerMapId, setSingleplayerMapId] = useState('harbor-industrial');
+  const [mapName, setMapName] = useState('Harbor Exchange');
+  const [mapRadarName, setMapRadarName] = useState('Harbor');
+  const [mapTagline, setMapTagline] = useState('Tactical FPS · Harbor Terminal · Round-Based 5v5');
+  const loadMapRef = useRef<((id: string) => void) | null>(null);
   const [networkPlayers, setNetworkPlayers] = useState<NetworkPlayer[]>([]);
   const [isHost, setIsHost] = useState(false);
   const [peerId, setPeerId] = useState('');
@@ -123,6 +124,16 @@ export default function Game() {
       }
     });
   }, []);
+
+  const activeMapId = isMultiplayerRef.current || menuState === 'lobby' || menuState === 'create'
+    ? roomSettings.map || 'harbor-industrial'
+    : singleplayerMapId;
+
+  useEffect(() => {
+    if (loadMapRef.current) {
+      loadMapRef.current(activeMapId);
+    }
+  }, [activeMapId]);
 
   useEffect(() => {
     if (!containerRef.current) return;
