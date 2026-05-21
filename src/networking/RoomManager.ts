@@ -77,20 +77,23 @@ export class RoomManager {
 
   public createRoom(settings: RoomSettings, playerName: string) {
     this.isHost = true;
-    this.state.settings = settings;
-    this.state.players = [{
-      id: this.peer!.id,
-      name: playerName,
-      team: 'CT',
-      isHost: true,
-      pos: { x: 0, y: 0, z: 0 },
-      yaw: 0,
-      pitch: 0,
-      weapon: 'knife',
-      hp: 100,
-      isShooting: false
-    }];
-    this.state.code = this.peer!.id;
+    this.state = {
+      ...this.state,
+      settings,
+      players: [{
+        id: this.peer!.id,
+        name: playerName,
+        team: 'CT',
+        isHost: true,
+        pos: { x: 0, y: 0, z: 0 },
+        yaw: 0,
+        pitch: 0,
+        weapon: 'knife',
+        hp: 100,
+        isShooting: false
+      }],
+      code: this.peer!.id
+    };
     this.onStateChange(this.state);
   }
 
@@ -131,14 +134,16 @@ export class RoomManager {
   }
 
   private handleTeamRequest(id: string, team: Team) {
-    const player = this.state.players.find(p => p.id === id);
-    if (!player) return;
+    const playerIndex = this.state.players.findIndex(p => p.id === id);
+    if (playerIndex === -1) return;
 
     const teamSize = this.state.settings.teamSize;
     const count = this.state.players.filter(p => p.team === team).length;
 
     if (team === 'Spectator' || count < teamSize) {
-      player.team = team;
+      const newPlayers = [...this.state.players];
+      newPlayers[playerIndex] = { ...newPlayers[playerIndex], team };
+      this.state = { ...this.state, players: newPlayers };
       this.broadcastState();
       this.onStateChange(this.state);
     }
@@ -196,13 +201,13 @@ export class RoomManager {
       isShooting: false
     };
 
-    this.state.players.push(newPlayer);
+    this.state = { ...this.state, players: [...this.state.players, newPlayer] };
     this.broadcastState();
     this.onStateChange(this.state);
   }
 
   private removePlayerFromRoom(id: string) {
-    this.state.players = this.state.players.filter(p => p.id !== id);
+    this.state = { ...this.state, players: this.state.players.filter(p => p.id !== id) };
     this.broadcastState();
     this.onStateChange(this.state);
   }
