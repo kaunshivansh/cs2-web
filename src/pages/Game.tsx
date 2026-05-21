@@ -31,7 +31,7 @@ import { getTeamVisualPalette } from '../rendering/viewmodel/TeamVisuals';
 import { buildAmmoView, buildScoreboardView } from '../ui/hud/ScoreboardModel';
 import { WEAPONS } from '../weapons/WeaponData';
 import { roomManager, type RoomState, type NetworkPlayer } from '../networking/RoomManager';
-import { MAP_MANIFEST } from '../maps/MapManifest';
+import { MAP_MANIFEST, type TacticalMapDefinition } from '../maps/MapManifest';
 
 export default function Game() {
   const [webglError, setWebglError] = useState(false);
@@ -271,7 +271,7 @@ export default function Game() {
     let activeViewWeaponId = '';
     let activeViewTeam: Team = 'CT';
 
-    const remotePlayers = new Map<string, { obj: THREE.Group, body: THREE.Mesh, head: THREE.Object3D, weaponMount: THREE.Group, targetPos: THREE.Vector3, targetYaw: number, targetPitch: number, team: string, name: string, hp: number, weapon: string, mixer: THREE.AnimationMixer | null, actions: { idle: any, run: any }, currentAction: any }>();
+    const remotePlayers = new Map<string, { obj: THREE.Group, visualGroup: THREE.Group, body: THREE.Mesh, head: THREE.Object3D, weaponMount: THREE.Group, targetPos: THREE.Vector3, targetYaw: number, targetPitch: number, team: string, name: string, hp: number, weapon: string, mixer: THREE.AnimationMixer | null, actions: { idle: any, run: any }, currentAction: any }>();
 
     roomManager.onNetworkEvent((event) => {
       if (event.type === 'PLAYER_UPDATE') {
@@ -283,7 +283,7 @@ export default function Game() {
           const model = createBotModel((data.team === 'Spectator' ? 'CT' : data.team) as 'CT' | 'T', data.weapon);
           scene.add(model.group);
           const newRemote = { 
-            obj: model.group, body: model.body, head: model.head, weaponMount: model.weaponMount,
+            obj: model.group, visualGroup: model.visualGroup, body: model.body, head: model.head, weaponMount: model.weaponMount,
             mixer: (model as any).mixer as THREE.AnimationMixer | null,
             actions: (model as any).actions,
             currentAction: (model as any).currentAction,
@@ -350,7 +350,7 @@ export default function Game() {
         remote.head.rotation.x += pitchDiff * 0.2;
 
         if (remote.mixer) remote.mixer.update(dt);
-        syncAnimation(remote, spd / dt);
+        syncAnimation(remote, spd / dt, dt);
       });
     }
 
@@ -544,6 +544,12 @@ export default function Game() {
     let CT_SPAWN_POS = vec(24,0,28);
     let T_SPAWN_POS = vec(-24,0,-36);
 
+    const siteMarkersGroup = new THREE.Group();
+    scene.add(siteMarkersGroup);
+
+    let cityGroup: THREE.Group | null = null;
+    let debugParentRef: THREE.Group | null = null;
+
     function siteMarker(label:string,x:number,z:number,col:string) {
       const c=document.createElement('canvas');c.width=c.height=256;const ctx=c.getContext('2d')!;
       ctx.fillStyle='rgba(20,16,10,0.22)';ctx.beginPath();ctx.arc(128,128,112,0,Math.PI*2);ctx.fill();
@@ -551,13 +557,10 @@ export default function Game() {
       ctx.fillStyle=col;ctx.font='bold 130px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(label,128,140);
       const t=new THREE.CanvasTexture(c);t.colorSpace=THREE.SRGBColorSpace;
       const m=new THREE.Mesh(new THREE.PlaneGeometry(5.5,5.5),new THREE.MeshStandardMaterial({map:t,transparent:true,opacity:0.82,depthWrite:false}));
-      m.rotation.x=-Math.PI/2;m.position.set(x,0.46,z);scene.add(m);
+      m.rotation.x=-Math.PI/2;m.position.set(x,0.46,z);siteMarkersGroup.add(m);
     }
-    // site markers will be added after the map is processed to reflect authored positions
 
-    // LOAD CITY MAP
-    const MAP_URL = '/assets/models/city.glb';
-    async function processCityModel(city: THREE.Group) {
+    async function processCityModel(city: THREE.Group, mapDef: TacticalMapDefinition) {
       if (!city) return;
       setLoadingStatus('PREPARING GEOMETRY');
       prepLoadedMapAsset(city);
@@ -566,20 +569,20 @@ export default function Game() {
       city.scale.setScalar(140 / (Math.max(size.x, size.z) || 1));
       b3.setFromObject(city); const center = b3.getCenter(new THREE.Vector3());
       city.position.x -= center.x; city.position.z -= center.z; city.position.y -= b3.min.y;
-        scene.add(city);
+      scene.add(city);
 
-        // Extract authored metadata points (world-space) if present in the GLTF
-        let foundSpawnCT = false, foundSpawnT = false, foundSiteA = false, foundSiteB = false;
-        city.traverse((child) => {
-          const name = (child as THREE.Object3D).name || '';
-          if (!name) return;
-          const wp = new THREE.Vector3();
-          (child as THREE.Object3D).getWorldPosition(wp);
-          if (name === 'Spawn_CT') { CT_SPAWN_POS.copy(wp); foundSpawnCT = true; }
-          if (name === 'Spawn_T') { T_SPAWN_POS.copy(wp); foundSpawnT = true; }
-          if (name === 'Site_A') { A_SITE.copy(wp); foundSiteA = true; }
-          if (name === 'Site_B') { B_SITE.copy(wp); foundSiteB = true; }
-        });
+      // Extract authored metadata points (world-space) if present in the GLTF
+      let foundSpawnCT = false, foundSpawnT = false, foundSiteA = false, foundSiteB = false;
+      city.traverse((child) => {
+        const name = (child as THREE.Object3D).name || '';
+        if (!name) return;
+        const wp = new THREE.Vector3();
+        (child as THREE.Object3D).getWorldPosition(wp);
+        if (name === 'Spawn_CT') { CT_SPAWN_POS.copy(wp); foundSpawnCT = true; }
+        if (name === 'Spawn_T') { T_SPAWN_POS.copy(wp); foundSpawnT = true; }
+        if (name === 'Site_A') { A_SITE.copy(wp); foundSiteA = true; }
+        if (name === 'Site_B') { B_SITE.copy(wp); foundSiteB = true; }
+      });
 
       const meshes: THREE.Mesh[] = [];
       city.traverse(o => { if ((o as THREE.Mesh).isMesh) { (o as THREE.Mesh).geometry.computeBoundingBox(); meshes.push(o as THREE.Mesh); } });
@@ -605,46 +608,39 @@ export default function Game() {
           await new Promise(r=>setTimeout(r,0));
         }
       }
-      // If the GLTF did not include authored spawn/site nodes, fall back to the MAP_MANIFEST entry
+
+      // If the GLTF did not include authored spawn/site nodes, fall back to the mapDef entry
       try {
-        const manifestMatch = MAP_MANIFEST.maps.find((m) => {
-          const lname = m.name.toLowerCase();
-          const mapNameL = MAP_NAME.toLowerCase();
-          const radarL = MAP_RADAR_NAME.toLowerCase();
-          return lname === mapNameL || m.id === radarL || lname.includes(radarL) || lname.includes(mapNameL);
-        });
+        // Ensure city world matrix is updated so we can transform model-space manifest coords
+        city.updateMatrixWorld(true);
 
-        if (manifestMatch) {
-          // Ensure city world matrix is updated so we can transform model-space manifest coords
-          city.updateMatrixWorld(true);
+        const toWorld = (pos: [number, number, number]) => {
+          const v = new THREE.Vector3(pos[0], pos[1], pos[2]);
+          city.localToWorld(v);
+          return v;
+        };
 
-          const toWorld = (pos: [number, number, number]) => {
-            const v = new THREE.Vector3(pos[0], pos[1], pos[2]);
-            city.localToWorld(v);
-            return v;
-          };
+        if (!foundSpawnCT) {
+          const s = mapDef.spawns.find((p) => p.team === 'CT');
+          if (s) CT_SPAWN_POS.copy(toWorld(s.position));
+        }
+        if (!foundSpawnT) {
+          const s = mapDef.spawns.find((p) => p.team === 'T');
+          if (s) T_SPAWN_POS.copy(toWorld(s.position));
+        }
 
-          if (!foundSpawnCT) {
-            const s = manifestMatch.spawns.find((p) => p.team === 'CT');
-            if (s) CT_SPAWN_POS.copy(toWorld(s.position));
-          }
-          if (!foundSpawnT) {
-            const s = manifestMatch.spawns.find((p) => p.team === 'T');
-            if (s) T_SPAWN_POS.copy(toWorld(s.position));
-          }
-
-          if (!foundSiteA) {
-            const a = manifestMatch.bombSites.find((b) => b.id === 'A');
-            if (a) A_SITE.copy(toWorld(a.position));
-          }
-          if (!foundSiteB) {
-            const b = manifestMatch.bombSites.find((b) => b.id === 'B');
-            if (b) B_SITE.copy(toWorld(b.position));
-          }
+        if (!foundSiteA) {
+          const a = mapDef.bombSites.find((b) => b.id === 'A');
+          if (a) A_SITE.copy(toWorld(a.position));
+        }
+        if (!foundSiteB) {
+          const b = mapDef.bombSites.find((b) => b.id === 'B');
+          if (b) B_SITE.copy(toWorld(b.position));
         }
       } catch (e) {
         // ignore manifest fallback errors in dev
       }
+
       // Create debug overlay meshes for colliders (wireframe boxes) and spawn markers
       try {
         const debugParent = new THREE.Group();
@@ -675,6 +671,7 @@ export default function Game() {
         bMark.rotation.x = -Math.PI / 2; bMark.position.copy(B_SITE); bMark.position.y += 0.45; debugParent.add(bMark);
 
         scene.add(debugParent);
+        debugParentRef = debugParent;
         try { (window as any).__GAME_DEBUG__ = (window as any).__GAME_DEBUG__ || {}; (window as any).__GAME_DEBUG__.debugOverlays = debugParent; } catch (e) {}
       } catch (e) { console.warn('Failed to create debug overlays', e); }
 
@@ -684,14 +681,10 @@ export default function Game() {
 
       setLoadingStatus('READY');
       setLoadingProgress(100);
-      // Move player to authored CT spawn (respecting eye height)
       try {
-        // 'player' is defined later in this scope; map load occurs asynchronously after that initialization
-        // so updating here is safe at runtime.
         (player as any).pos.set(CT_SPAWN_POS.x, EYE, CT_SPAWN_POS.z);
       } catch (e) {}
 
-      // Expose authored positions and collider count for quick visual debugging in dev
       try {
         (window as any).__MAP_DEBUG__ = {
           ctSpawn: CT_SPAWN_POS.clone(),
@@ -705,17 +698,84 @@ export default function Game() {
       setMapLoaded(true); mapLoadedRef.current = true;
     }
 
-    gltfLoader.load(MAP_URL, (gltf) => {
-      processCityModel(gltf.scene);
-    }, (p) => {
-      setLoadingStatus('DOWNLOADING MAP (8MB)');
-      if (p.total) setLoadingProgress(Math.min(20, Math.round((p.loaded / p.total) * 20)));
-      else setLoadingProgress(10);
-    }, (e) => {
-      console.error("Map load failed:", e); 
-      setLoadingStatus('MAP LOAD FAILED - BOOTING FALLBACK');
-      setMapLoaded(true); mapLoadedRef.current=true; 
-    });
+    async function loadSelectedMap(mapId: string) {
+      setMapLoaded(false);
+      mapLoadedRef.current = false;
+      setLoadingStatus('LOADING MAP...');
+      setLoadingProgress(0);
+
+      // Clean up previous map group
+      if (cityGroup) {
+        scene.remove(cityGroup);
+        disposeObject3DResources(cityGroup);
+        cityGroup = null;
+      }
+
+      // Clear colliders and minimap walls
+      colliders.length = 0;
+      minimapWalls.length = 0;
+
+      // Clear site markers
+      while (siteMarkersGroup.children.length > 0) {
+        const child = siteMarkersGroup.children[0];
+        siteMarkersGroup.remove(child);
+        disposeObject3DResources(child);
+      }
+
+      // Clear debug overlays
+      if (debugParentRef) {
+        scene.remove(debugParentRef);
+        disposeObject3DResources(debugParentRef);
+        debugParentRef = null;
+      }
+
+      const mapDef = MAP_MANIFEST.maps.find(m => m.id === mapId) || MAP_MANIFEST.maps[0];
+      
+      // Update metadata states
+      setMapName(mapDef.name);
+      setMapRadarName(mapDef.name.split(' ')[0] || mapDef.name);
+      setMapTagline(`Tactical FPS · ${mapDef.name} · Round-Based 5v5`);
+
+      // Set baseline values from the manifest
+      const ctSpawnDef = mapDef.spawns.find(s => s.team === 'CT');
+      if (ctSpawnDef) CT_SPAWN_POS.set(ctSpawnDef.position[0], ctSpawnDef.position[1], ctSpawnDef.position[2]);
+      const tSpawnDef = mapDef.spawns.find(s => s.team === 'T');
+      if (tSpawnDef) T_SPAWN_POS.set(tSpawnDef.position[0], tSpawnDef.position[1], tSpawnDef.position[2]);
+
+      const siteADef = mapDef.bombSites.find(s => s.id === 'A');
+      if (siteADef) A_SITE.set(siteADef.position[0], siteADef.position[1], siteADef.position[2]);
+      const siteBDef = mapDef.bombSites.find(s => s.id === 'B');
+      if (siteBDef) B_SITE.set(siteBDef.position[0], siteBDef.position[1], siteBDef.position[2]);
+
+      const mapUrl = `${mapDef.assetRoot}${mapDef.id}.glb`;
+      
+      const tryLoad = (url: string, isFallback: boolean) => {
+        gltfLoader.load(url, (gltf) => {
+          cityGroup = gltf.scene;
+          processCityModel(cityGroup, mapDef);
+        }, (p) => {
+          setLoadingStatus(`DOWNLOADING ${mapDef.name.toUpperCase()} (${isFallback ? 'FALLBACK' : 'MAP'})`);
+          if (p.total) setLoadingProgress(Math.min(20, Math.round((p.loaded / p.total) * 20)));
+          else setLoadingProgress(10);
+        }, (e) => {
+          console.warn(`Failed to load map asset: ${url}`, e);
+          if (!isFallback) {
+            console.log("Attempting fallback to city.glb");
+            tryLoad('/assets/models/city.glb', true);
+          } else {
+            console.error("Critical: Fallback map loading failed.");
+            setLoadingStatus('MAP LOAD FAILED');
+            setMapLoaded(true); mapLoadedRef.current = true;
+          }
+        });
+      };
+
+      tryLoad(mapUrl, false);
+    }
+
+    loadMapRef.current = loadSelectedMap;
+
+    loadSelectedMap(activeMapId);
 
     // Safety timeout: If map isn't ready in 20s, force proceed with fallback floor
     scheduleTimeout(() => {
@@ -957,8 +1017,10 @@ export default function Game() {
     function createBotModel(team:string, weaponId:string){
       const isCT = team==='CT';
       const g = new THREE.Group();
+      const visualGroup = new THREE.Group();
+      g.add(visualGroup);
       const res: any = { 
-        group: g, body: null, head: null, weaponMount: null, 
+        group: g, visualGroup: visualGroup, body: null, head: null, weaponMount: null, 
         mixer: null, actions: { idle: null, run: null }, 
         currentAction: null 
       };
@@ -966,13 +1028,13 @@ export default function Game() {
       // AUTH HITBOXES
       const hitBoxMat = new THREE.MeshBasicMaterial({ visible: false });
       const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.32,0.62,5,12), hitBoxMat); 
-      torso.position.y=1.0; g.add(torso); res.body = torso;
-      const headGroup = new THREE.Group(); headGroup.position.set(0,1.60,0.05); g.add(headGroup); res.head = headGroup;
+      torso.position.y=1.0; visualGroup.add(torso); res.body = torso;
+      const headGroup = new THREE.Group(); headGroup.position.set(0,1.60,0.05); visualGroup.add(headGroup); res.head = headGroup;
       const faceHitbox = new THREE.Mesh(new THREE.SphereGeometry(0.18,12,12), hitBoxMat); 
       faceHitbox.position.set(0,0.08,0); headGroup.add(faceHitbox);
 
       // MOUNT
-      const weaponMount = new THREE.Group(); weaponMount.position.set(0.18,0.98,0.28); g.add(weaponMount);
+      const weaponMount = new THREE.Group(); weaponMount.position.set(0.18,0.98,0.28); visualGroup.add(weaponMount);
       res.weaponMount = weaponMount;
       const worldWeapon = createWeaponModel(weaponId,'world', team as Team);
       worldWeapon.group.rotation.set(0,-Math.PI/2,Math.PI/2);
@@ -984,7 +1046,7 @@ export default function Game() {
       const pal = getTeamVisualPalette(team as Team);
       addMesh(fallback, new THREE.CapsuleGeometry(0.3,0.6,4,8), new THREE.MeshStandardMaterial({color:pal.uniformColor}), 0,1,0);
       addMesh(fallback, new THREE.SphereGeometry(0.18,10,10), new THREE.MeshStandardMaterial({color:pal.skinColor}), 0,1.68,0.05);
-      g.add(fallback);
+      visualGroup.add(fallback);
 
       const modelName = isCT ? 'sas__cs2_agent_model_blue' : 'elf_female_soldier';
       const setupInstance = (data: any) => {
@@ -1013,7 +1075,7 @@ export default function Game() {
         const b3 = new THREE.Box3().setFromObject(model); const sz = b3.getSize(new THREE.Vector3());
         model.scale.setScalar(1.82 / (sz.y || 1));
         b3.setFromObject(model); model.position.y = -b3.min.y;
-        g.add(model);
+        visualGroup.add(model);
       };
 
       const cached = characterCache.get(modelName);
@@ -1056,7 +1118,7 @@ export default function Game() {
       model.group.position.copy(pos); scene.add(model.group);
       return {
         id: 'bot-' + Math.random().toString(36).substr(2, 9),
-        obj:model.group, body:model.body, head:model.head, weaponMount:model.weaponMount,
+        obj:model.group, visualGroup: model.visualGroup, body:model.body, head:model.head, weaponMount:model.weaponMount,
         mixer: (model as any).mixer as THREE.AnimationMixer | null,
         team, name, role, hp:100, armor:weaponId==='glock'?0:100, helmet:weaponId!=='glock',
         alive:true, weapon:weaponId, ammoMag:WEAPONS[weaponId].magSize, reloadT:0,
@@ -1321,8 +1383,8 @@ export default function Game() {
       const shooterTeam = shooter === 'player' ? player.team : shooter.team;
       for(const bot of bots){
         if(!bot.alive||bot===shooter||bot.team===shooterTeam)continue;
-        const hh=raycaster.intersectObject(bot.head,false)[0];
-        const bh=raycaster.intersectObject(bot.body,false)[0];
+        const hh=raycaster.intersectObject(bot.head,true)[0];
+        const bh=raycaster.intersectObject(bot.body,true)[0];
         const hit=hh&&(!bh||hh.distance<bh.distance)?{dist:hh.distance,bot,part:'head',point:hh.point}:bh?{dist:bh.distance,bot,part:'body',point:bh.point}:null;
         if(hit&&(!best||hit.dist<best.dist))best=hit;
       }
@@ -1335,8 +1397,8 @@ export default function Game() {
       // Multiplayer remote players hit detection
       for(const [id, remote] of remotePlayers.entries()) {
          if (remote.hp <= 0 || remote.team === shooterTeam) continue;
-         const hh=raycaster.intersectObject(remote.head,false)[0];
-         const bh=raycaster.intersectObject(remote.body,false)[0];
+         const hh=raycaster.intersectObject(remote.head,true)[0];
+         const bh=raycaster.intersectObject(remote.body,true)[0];
          const hit=hh&&(!bh||hh.distance<bh.distance)?{dist:hh.distance,remoteId: id, remote, part:'head',point:hh.point}:bh?{dist:bh.distance,remoteId: id, remote, part:'body',point:bh.point}:null;
          if(hit&&(!best||hit.dist<best.dist))best=hit;
       }
@@ -2728,16 +2790,45 @@ export default function Game() {
     const onResize=()=>{camera.aspect=dom.game.clientWidth/dom.game.clientHeight;camera.updateProjectionMatrix();renderer.setSize(dom.game.clientWidth,dom.game.clientHeight);};
     addEventListener('resize',onResize);
 
-    function syncAnimation(entity: any, speed: number) {
-      if (!entity.mixer || !entity.actions || !entity.actions.idle || !entity.actions.run) return;
+    function syncAnimation(entity: any, speed: number, dt: number) {
+      if (entity.mixer && entity.actions && entity.actions.idle && entity.actions.run) {
+        const isMoving = speed > 0.15;
+        const target = isMoving ? entity.actions.run : entity.actions.idle;
+        
+        if (entity.currentAction !== target) {
+          const prev = entity.currentAction;
+          entity.currentAction = target;
+          target.reset().fadeIn(0.2).play();
+          if (prev) prev.fadeOut(0.2);
+        }
+      }
+
+      if (!entity.visualGroup) return;
+
+      if (entity.procTime === undefined) {
+        entity.procTime = Math.random() * 100;
+      }
+      entity.procTime += dt;
+
+      const time = entity.procTime;
       const isMoving = speed > 0.15;
-      const target = isMoving ? entity.actions.run : entity.actions.idle;
-      
-      if (entity.currentAction !== target) {
-        const prev = entity.currentAction;
-        entity.currentAction = target;
-        target.reset().fadeIn(0.2).play();
-        if (prev) prev.fadeOut(0.2);
+
+      if (!isMoving) {
+        entity.visualGroup.position.y = Math.sin(time * 2.2) * 0.02;
+        entity.visualGroup.rotation.z = Math.sin(time * 1.5) * 0.015;
+        entity.visualGroup.rotation.x = Math.sin(time * 1.2) * 0.01;
+        entity.visualGroup.position.x = 0;
+        entity.visualGroup.position.z = 0;
+      } else {
+        const bobSpeed = Math.min(speed, 6.0) * 1.8;
+        const bobAmp = 0.04 + Math.min(speed, 6.0) * 0.01;
+
+        entity.visualGroup.position.y = Math.sin(time * bobSpeed * 2) * bobAmp - (bobAmp * 0.5);
+        entity.visualGroup.position.x = Math.sin(time * bobSpeed) * bobAmp * 0.7;
+
+        const targetLeanX = Math.min(speed, 6.0) * 0.03;
+        entity.visualGroup.rotation.x = targetLeanX + Math.sin(time * bobSpeed * 2) * 0.02;
+        entity.visualGroup.rotation.z = Math.sin(time * bobSpeed) * 0.04;
       }
     }
 
@@ -2754,12 +2845,14 @@ export default function Game() {
           }
           updatePlayer(dt);
           if (player.mixer) player.mixer.update(dt);
-          syncAnimation(player, hspd(player.vel));
+          syncAnimation(player, hspd(player.vel), dt);
 
           for(const b of bots){
+            const prevPos = b.obj.position.clone();
             updateBot(b,dt);
             if (b.mixer) b.mixer.update(dt);
-            syncAnimation(b, hspd(b.obj.position.clone().sub(b.navLastPos || b.obj.position)));
+            const movedDist = hspd(b.obj.position.clone().sub(prevPos));
+            syncAnimation(b, movedDist / dt, dt);
           }
           updateDroppedWeapons(dt);
           updateHUD();
@@ -2884,7 +2977,7 @@ export default function Game() {
   }
 
   const onCreateRoom = () => {
-    roomManager.createRoom({ ...roomSettings, map: 'HARBOR' }, username || 'Player');
+    roomManager.createRoom(roomSettings, username || 'Player');
     setIsHost(true);
     isHostRef.current = true;
     setMenuState('lobby');
@@ -2952,7 +3045,7 @@ export default function Game() {
         <div style={{position:'absolute',top:14,left:14,borderRadius:12,overflow:'hidden',border:'1px solid rgba(255,255,255,.1)',boxShadow:'0 4px 28px rgba(0,0,0,.6),0 0 0 1px rgba(0,0,0,.3)',background:'rgba(6,8,12,0.95)'}}>
           <canvas ref={minimapRef} width={220} height={220} style={{display:'block',borderRadius:11}} />
           <div style={{position:'absolute',top:6,left:8,fontSize:8,letterSpacing:'.18em',color:'rgba(255,255,255,.35)',fontWeight:600,textTransform:'uppercase'}}>RADAR</div>
-          <div style={{position:'absolute',top:5,right:8,fontSize:8,letterSpacing:'.12em',color:'rgba(255,255,255,.25)',fontWeight:500}}>{MAP_RADAR_NAME}</div>
+          <div style={{position:'absolute',top:5,right:8,fontSize:8,letterSpacing:'.12em',color:'rgba(255,255,255,.25)',fontWeight:500}}>{mapRadarName}</div>
         </div>
 
         {/* Killfeed */}
@@ -3041,10 +3134,10 @@ export default function Game() {
 
             {/* Logo */}
             <div style={{textAlign:'center',marginBottom:32}}>
-              <div style={{fontSize:11,letterSpacing:'.55em',color:'rgba(255,255,255,.38)',marginBottom:8,textTransform:'uppercase'}}>{MAP_TAGLINE}</div>
+              <div style={{fontSize:11,letterSpacing:'.55em',color:'rgba(255,255,255,.38)',marginBottom:8,textTransform:'uppercase'}}>{mapTagline}</div>
               <h1 style={{margin:0,fontSize:'clamp(44px,7vw,78px)',fontWeight:900,letterSpacing:'.1em',lineHeight:.95,
                 background:'linear-gradient(135deg,#f5e8c8 10%,#d9ab5a 50%,#f5e8c8 90%)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent',backgroundClip:'text',textTransform:'uppercase'}}>
-                {MAP_NAME}
+                {mapName}
               </h1>
             </div>
 
@@ -3088,6 +3181,12 @@ export default function Game() {
                         onKeyDown={e => { if(e.key==='Enter') handleEnterMatch(false); }}
                         style={{width:'100%', maxWidth: 300, boxSizing:'border-box',background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.12)',borderRadius:12,color:'#f3eee2',fontFamily:'inherit',fontSize:14,fontWeight:600,letterSpacing:'.08em',padding:'13px 16px',outline:'none',textAlign:'center', marginBottom: 20}}
                       />
+                    </div>
+                    <div style={{marginBottom: 20}}>
+                       <div style={{fontSize: 9, opacity: 0.5, letterSpacing: '0.2em', marginBottom: 10}}>SELECT MAP</div>
+                       <select value={singleplayerMapId} onChange={e => setSingleplayerMapId(e.target.value)} style={{background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.12)', padding: '10px 15px', borderRadius: 12, color: '#f3eee2', fontSize: 13, minWidth: 200, fontFamily: 'inherit', textAlign: 'center', outline: 'none', cursor: 'pointer'}}>
+                         {MAP_MANIFEST.maps.map(m => <option key={m.id} value={m.id} style={{background: '#121720', color: '#f3eee2'}}>{m.name}</option>)}
+                       </select>
                     </div>
                     <div style={{marginBottom: 20}}>
                        <div style={{fontSize: 9, opacity: 0.5, letterSpacing: '0.2em', marginBottom: 10}}>SIDE PREFERENCE</div>
@@ -3143,6 +3242,12 @@ export default function Game() {
                         <label style={{display:'block', fontSize: 9, opacity: 0.5, marginBottom: 5}}>MAX ROUNDS</label>
                         <select value={roomSettings.maxRounds} onChange={e => setRoomSettings({...roomSettings, maxRounds: parseInt(e.target.value)})} style={{background: '#1a1e24', color: '#fff', border: '1px solid #333', padding: '10px', borderRadius: 8}}>
                           {[5,10,15,30].map(n => <option key={n} value={n}>{n} Rounds</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{display:'block', fontSize: 9, opacity: 0.5, marginBottom: 5}}>MAP</label>
+                        <select value={roomSettings.map} onChange={e => setRoomSettings({...roomSettings, map: e.target.value})} style={{background: '#1a1e24', color: '#fff', border: '1px solid #333', padding: '10px', borderRadius: 8, outline: 'none'}}>
+                          {MAP_MANIFEST.maps.map(m => <option key={m.id} value={m.id} style={{background: '#1a1e24', color: '#fff'}}>{m.name}</option>)}
                         </select>
                       </div>
                     </div>
