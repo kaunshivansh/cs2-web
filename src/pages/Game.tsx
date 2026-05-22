@@ -681,6 +681,17 @@ export default function Game() {
           aSite: A_SITE.clone(),
           bSite: B_SITE.clone(),
           collidersCount: colliders.length,
+          colliders: colliders.map(c => ({ min: { x: c.min.x, y: c.min.y, z: c.min.z }, max: { x: c.max.x, y: c.max.y, z: c.max.z } })),
+        };
+        (window as any).__BLOCKED_AT__ = (x: number, z: number, r = 0.42) => {
+          const mnX = x - r, mxX = x + r, mnZ = z - r, mxZ = z + r;
+          for (const c of colliders) {
+            const h = c.max.y - c.min.y;
+            if (c.max.y > 0.7 && h > 0.48) {
+              if (mnX < c.max.x && mxX > c.min.x && mnZ < c.max.z && mxZ > c.min.z) return true;
+            }
+          }
+          return false;
         };
       } catch (e) {}
 
@@ -1260,9 +1271,9 @@ export default function Game() {
 
       console.log(`[MATCH] Spawning ${neededCT} CT and ${neededT} T bots. (Local Team: ${playerTeamRef.current})`);
 
-      const ctSpawns = [vec(16,4.65,30),vec(20,4.65,28),vec(24,4.65,30),vec(28,4.65,28),vec(14,4.65,30)];
-      const tSpawnsA = [vec(-30,4.65,-36),vec(-24,4.65,-36),vec(-18,4.65,-34),vec(-10,4.65,-34),vec(-12,4.65,-34)];
-      const tSpawnsB = [vec(-28,4.65,-36),vec(-20,4.65,-36),vec(-14,4.65,-34),vec(-8,4.65,-34),vec(-22,4.65,-36)];
+      const ctSpawns = [vec(16,4.65,30),vec(20.5,4.65,28),vec(24,4.65,30),vec(28,4.65,28),vec(14,4.65,30)];
+      const tSpawnsA = [vec(-35.3,4.65,-34.6),vec(-24,4.65,-30),vec(-16.5,4.65,-34),vec(-11.7,4.65,-31),vec(-12,4.65,-34)];
+      const tSpawnsB = [vec(-28,4.65,-30),vec(-16.5,4.65,-36),vec(-14,4.65,-34),vec(-8,4.65,-30),vec(-22,4.65,-30)];
       const tSpawns = state.attackSite==='A'?tSpawnsA:tSpawnsB;
       const tRoles=['LEAD_L','SUPPORT_L','MID','SUPPORT_R','LEAD_R'];
       const ctRoles=['A_ANCHOR','MID','B_ANCHOR','FLOAT','ROTATE'];
