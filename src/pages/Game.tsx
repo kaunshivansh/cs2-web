@@ -613,13 +613,20 @@ export default function Game() {
           name.includes('seemaforo') || 
           name.includes('cartello') || 
           name.includes('divieto') || 
-          name.includes('cespuglio');
+          name.includes('cespuglio') ||
+          name.includes('sky') ||
+          name.includes('dome');
 
         if (isExcluded) continue;
 
         tempB3.copy(mesh.geometry.boundingBox).applyMatrix4(mesh.matrixWorld);
         tempB3.getSize(vSize);
         
+        // Exclude huge backdrop/environment scenery (e.g. skybox, background terrain/domes, combined boundaries)
+        if (vSize.x > 30.0 || vSize.z > 30.0) {
+          continue;
+        }
+
         if (vSize.y > 0.4 && vSize.x > 0.05 && vSize.z > 0.05) {
           colliders.push({ min: tempB3.min.clone(), max: tempB3.max.clone() });
           minimapWalls.push({ x:(tempB3.min.x+tempB3.max.x)/2, z:(tempB3.min.z+tempB3.max.z)/2, w:vSize.x, d:vSize.z });
@@ -1560,6 +1567,11 @@ export default function Game() {
         return false;
       };
       try1('x');try1('z');const hit=try1('y');
+      // Enforce map boundaries clamping to [-60.0, 60.0]
+      if (pos.x < -60.0) { pos.x = -60.0; vel.x = 0; }
+      else if (pos.x > 60.0) { pos.x = 60.0; vel.x = 0; }
+      if (pos.z < -60.0) { pos.z = -60.0; vel.z = 0; }
+      else if (pos.z > 60.0) { pos.z = 60.0; vel.z = 0; }
       if(pos.y<CT_SPAWN_POS.y+eyeH){pos.y=CT_SPAWN_POS.y+eyeH;vel.y=0;return true;}
       return hit;
     }
@@ -1787,6 +1799,8 @@ export default function Game() {
         if(botCollides(next)){next.x=bot.obj.position.x-side.x;next.z=bot.obj.position.z-side.z;}
         if(botCollides(next)){next.copy(bot.obj.position);}
       }
+      next.x = Math.max(-60.0, Math.min(60.0, next.x));
+      next.z = Math.max(-60.0, Math.min(60.0, next.z));
       bot.obj.position.copy(next);
       bot.obj.rotation.y=Math.atan2(target.x-bot.obj.position.x,target.z-bot.obj.position.z);
       return false;

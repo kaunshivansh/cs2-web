@@ -16,8 +16,8 @@ const puppeteer = require('puppeteer');
     console.error(`[BROWSER EXCEPTION]:`, err);
   });
 
-  console.log("Navigating to http://localhost:3000/ ...");
-  await page.goto('http://localhost:3000/');
+  console.log("Navigating to http://localhost:3005/ ...");
+  await page.goto('http://localhost:3005/');
 
   console.log("Waiting for map to load...");
   // The map loaded UI contains the button "SINGLEPLAYER". Let's wait for it.
