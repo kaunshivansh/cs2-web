@@ -8,8 +8,8 @@
     "test": "node --test --experimental-strip-types tests/**/*.test.ts",
     "typecheck": "tsc --noEmit",
     "build": "vite build",
-    "serve": "node server.cjs",
-    "start": "node server.cjs"
+    "serve": "node scripts/local-server.cjs",
+    "start": "node scripts/local-server.cjs"
   },
   "dependencies": {
     "@types/three": "^0.184.0",

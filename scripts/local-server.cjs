@@ -3,9 +3,10 @@ const path = require('path');
 const app = express();
 
 const PORT = process.env.PORT || 3000;
+const ROOT = path.join(__dirname, '..');
 
 // Serve static files from the dist directory with correct MIME types and cache headers
-app.use(express.static(path.join(__dirname, 'dist'), {
+app.use(express.static(path.join(ROOT, 'dist'), {
   setHeaders: (res, filePath) => {
     const ext = path.extname(filePath).toLowerCase();
     
@@ -30,7 +31,7 @@ app.use(express.static(path.join(__dirname, 'dist'), {
 // Fallback to index.html for Single Page Application (SPA) routing
 app.use((req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+  res.sendFile(path.join(ROOT, 'dist', 'index.html'));
 });
 
 app.listen(PORT, '0.0.0.0', () => {
