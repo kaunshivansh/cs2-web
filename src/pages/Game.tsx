@@ -548,7 +548,7 @@ export default function Game() {
     scene.add(siteMarkersGroup);
 
     let cityGroup: THREE.Group | null = null;
-    let debugParentRef: THREE.Group | null = null;
+
 
     function siteMarker(label:string,x:number,z:number,col:string) {
       const c=document.createElement('canvas');c.width=c.height=256;const ctx=c.getContext('2d')!;
@@ -613,12 +613,7 @@ export default function Game() {
           name.includes('seemaforo') || 
           name.includes('cartello') || 
           name.includes('divieto') || 
-          name.includes('cespuglio') || 
-          name.includes('macchina') || 
-          name.includes('camion') || 
-          name.includes('bus') || 
-          name.includes('cylinder') || 
-          name.includes('sphere');
+          name.includes('cespuglio');
 
         if (isExcluded) continue;
 
@@ -660,39 +655,7 @@ export default function Game() {
       }
 
 
-      // Create debug overlay meshes for colliders (wireframe boxes) and spawn markers
-      try {
-        const debugParent = new THREE.Group();
-        debugParent.name = 'debug-overlays';
 
-        for (const c of colliders) {
-          const size = new THREE.Vector3().subVectors(c.max, c.min);
-          const center = new THREE.Vector3().addVectors(c.min, c.max).multiplyScalar(0.5);
-          const geo = new THREE.BoxGeometry(size.x, size.y, size.z);
-          const mat = new THREE.MeshBasicMaterial({ color: 0x00ff66, wireframe: true });
-          const m = new THREE.Mesh(geo, mat);
-          m.position.copy(center);
-          debugParent.add(m);
-        }
-
-        const spawnMatCT = new THREE.MeshBasicMaterial({ color: 0x3399ff, transparent: true, opacity: 0.9 });
-        const spawnMatT = new THREE.MeshBasicMaterial({ color: 0xff6633, transparent: true, opacity: 0.9 });
-        const ctSphere = new THREE.Mesh(new THREE.SphereGeometry(0.5, 8, 8), spawnMatCT);
-        ctSphere.position.copy(CT_SPAWN_POS);
-        debugParent.add(ctSphere);
-        const tSphere = new THREE.Mesh(new THREE.SphereGeometry(0.5, 8, 8), spawnMatT);
-        tSphere.position.copy(T_SPAWN_POS);
-        debugParent.add(tSphere);
-
-        const aMark = new THREE.Mesh(new THREE.CircleGeometry(2.2, 16), new THREE.MeshBasicMaterial({ color: 0xdc8a66, transparent: true, opacity: 0.85 }));
-        aMark.rotation.x = -Math.PI / 2; aMark.position.copy(A_SITE); aMark.position.y += 0.45; debugParent.add(aMark);
-        const bMark = new THREE.Mesh(new THREE.CircleGeometry(2.2, 16), new THREE.MeshBasicMaterial({ color: 0xdc8a66, transparent: true, opacity: 0.85 }));
-        bMark.rotation.x = -Math.PI / 2; bMark.position.copy(B_SITE); bMark.position.y += 0.45; debugParent.add(bMark);
-
-        scene.add(debugParent);
-        debugParentRef = debugParent;
-        try { (window as any).__GAME_DEBUG__ = (window as any).__GAME_DEBUG__ || {}; (window as any).__GAME_DEBUG__.debugOverlays = debugParent; } catch (e) {}
-      } catch (e) { console.warn('Failed to create debug overlays', e); }
 
       // Place site markers now that authored positions are known
       siteMarker('A', A_SITE.x, A_SITE.z, '#dc8a66');
@@ -741,12 +704,7 @@ export default function Game() {
         disposeObject3DResources(child);
       }
 
-      // Clear debug overlays
-      if (debugParentRef) {
-        scene.remove(debugParentRef);
-        disposeObject3DResources(debugParentRef);
-        debugParentRef = null;
-      }
+
 
       const mapDef = MAP_MANIFEST.maps.find(m => m.id === mapId) || MAP_MANIFEST.maps[0];
       
@@ -1075,26 +1033,31 @@ export default function Game() {
           weaponMount.scale.setScalar(2.2); 
         }
         model.rotation.y = Math.PI; 
-        if (data.animations.length > 0) {
+        // Only set up animation mixer if proper gameplay animations exist
+        // The CS2 models have internal eye_test/tools_preview tracks that break rigging
+        const idleClip = data.animations.find((a:any) => a.name.toLowerCase().includes('idle'));
+        const walkClip = data.animations.find((a:any) => a.name.toLowerCase().includes('walk'));
+        const runClip = data.animations.find((a:any) => a.name.toLowerCase().includes('run'));
+        if (idleClip || walkClip || runClip) {
           const m = new THREE.AnimationMixer(model); res.mixer = m;
-          const iC = data.animations.find((a:any)=>a.name.toLowerCase().includes('idle'))||data.animations[0];
-          const wC = data.animations.find((a:any)=>a.name.toLowerCase().includes('walk'))||data.animations.find((a:any)=>a.name.toLowerCase().includes('run'))||iC;
-          const rC = data.animations.find((a:any)=>a.name.toLowerCase().includes('run'))||wC||iC;
+          const iC = idleClip || walkClip || runClip!;
+          const wC = walkClip || runClip || iC;
+          const rC = runClip || walkClip || iC;
           res.actions.idle = m.clipAction(iC);
           res.actions.walk = m.clipAction(wC);
           res.actions.run = m.clipAction(rC);
 
           for (const key in res.actions) {
-            const action = res.actions[key];
+            const action = (res.actions as Record<string, any>)[key];
             if (action) {
               action.enabled = true;
               action.setEffectiveTimeScale(1);
               action.setEffectiveWeight(key === 'idle' ? 1.0 : 0.0);
+              action.play();
             }
           }
           res.currentAction = res.actions.idle;
           res.currentActionName = 'idle';
-          if (res.actions.idle) res.actions.idle.play();
         }
         const b3 = new THREE.Box3().setFromObject(model); const sz = b3.getSize(new THREE.Vector3());
         model.scale.setScalar(1.82 / (sz.y || 1));
