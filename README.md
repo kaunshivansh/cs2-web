@@ -4,129 +4,105 @@ Live project: [cs2-web-three.vercel.app](https://cs2-web-three.vercel.app)
 
 ![CS2 Web splash](./public/opengraph.jpg)
 
-A browser-based tactical FPS prototype built with React, TypeScript, Three.js, and Vite.
+A browser-based tactical FPS prototype built with **React**, **TypeScript**, **Three.js**, and **Vite**. 
 
-The project aims to capture the feel of a 5v5 round-based defusal shooter in the browser while gradually extracting the prototype into cleaner, testable systems for match rules, AI, weapons, maps, audio, and rendering.
+The project aims to capture the feel of a 5v5 round-based defusal shooter in the browser. It features a complete gameplay loop, advanced bot AI, realistic weapon mechanics, and P2P multiplayer. The codebase is actively being structured into clean, testable systems for match rules, AI, weapons, maps, audio, and rendering.
 
-## Current State
+## Current State & Features
 
-- Playable first-person browser prototype with lobby, pointer-lock aiming, shooting, bots, bomb plant/defuse flow, buy phase, scoreboard, and spectator flow.
-- Main gameplay shell currently lives in [`src/pages/Game.tsx`](./src/pages/Game.tsx), which is still a large prototype file.
-- Several gameplay systems have already been pulled into standalone TypeScript modules with tests:
-  - Match rules and economy
-  - Weapon catalog validation
-  - Tactical AI scoring and bot difficulty profiles
-  - Adaptive renderer quality control
-  - Lazy WebAudio bootstrapping
-  - Tactical map manifest validation
-- The active playable map is still hardcoded around Harbor Exchange, while the broader map pipeline is being prepared through the manifest and asset system.
+The project is highly playable and includes the following fully integrated systems:
+
+### 🎮 Gameplay & Mechanics
+- **5v5 Round-based Matches:** Complete with freeze time, live action, bomb planting, and defusal phases.
+- **Realistic Combat System:** Features hitboxes, headshot multipliers, damage falloff over distance, armor penetration, and helmet logic (`src/gameplay/combat`).
+- **Weapon Mechanics:** Unique recoil patterns, movement spread penalties, camera punch (aim kick), and first-shot accuracy logic (`src/gameplay/player/RecoilPatterns.ts`, `WeaponFeel.ts`).
+- **Economy System:** Full CS-style economy with a buy menu, round loss bonuses, and loadout management (`src/gameplay/match`, `src/ai/BotEconomy.ts`).
+- **First-Person Controller:** Smooth movement, jumping, crouching, counter-strafing, and view bobbing.
+
+### 🧠 Advanced Bot AI
+Bots are not just target practice; they utilize a robust, multi-layered AI system (`src/ai`):
+- **Tactical Director:** Evaluates situations dynamically to choose actions like `take-cover`, `trade-frag`, `hold-crossfire`, `plant-or-defuse`, or `investigate-sound` (`TacticalDirector.ts`).
+- **Combat Controller:** State machine handling engagements, suppressing fire, retreating to cover, and reloading safely (`BotCombatController.ts`).
+- **Navigation & Pathfinding:** Generates navigation graphs and analyzes chokepoints to smoothly navigate complex maps (`Navigation.ts`).
+- **Difficulty Profiles:** AI profiles ranging from `easy` to `pro`, affecting reaction time, accuracy, aggression, and peek discipline.
+
+### 🌐 Multiplayer (P2P)
+- **PeerJS Integration:** Seamless, serverless multiplayer through WebRTC data channels (`src/networking/RoomManager.ts`).
+- **State Synchronization:** Synchronizes player transforms, animations, weapon states, health, and combat events across the network.
+
+### 🖼️ Rendering & Tech
+- **Three.js Graphics:** First-person procedural view models, muzzle flashes, tracers, dynamic lighting, and shadows.
+- **Map Pipeline:** Loads GLTF/GLB environments (compressed with Draco) using a flexible manifest system allowing for multiple map definitions (`src/maps/MapLoader.ts`).
+- **Adaptive Quality:** Dynamically adjusts WebGL pixel ratio based on device framerate to maintain smooth performance (`src/rendering/AdaptiveQuality.ts`).
+- **Audio System:** Lazy WebAudio bootstrapping with spatial audio for footsteps, gunshots, and objective events.
 
 ## Tech Stack
 
-- React 19
-- TypeScript
-- Three.js
-- Vite
-- Node built-in test runner
+- **Framework:** React 19 + TypeScript
+- **Graphics Engine:** Three.js
+- **Networking:** PeerJS
+- **Build Tool:** Vite
+- **Testing:** Node built-in test runner
 
 ## Getting Started
 
 ### Requirements
-
 - Node.js 22+ recommended
 - npm
 
 ### Install
-
 ```bash
 npm install
 ```
 
-### Run locally
-
+### Run Locally
 ```bash
 npm run dev
 ```
-
 Vite serves the game on `http://localhost:5173`.
 
 ## Available Scripts
 
-- `npm run dev` starts the local dev server on `0.0.0.0:5173`
-- `npm test` runs the TypeScript node tests
-- `npm run typecheck` runs `tsc --noEmit`
-- `npm run build` creates the production build in `dist/`
-- `npm run serve` previews the built app locally
+- `npm run dev` - Starts the local dev server on `0.0.0.0:5173`
+- `npm test` - Runs the TypeScript node tests
+- `npm run typecheck` - Validates types via `tsc --noEmit`
+- `npm run build` - Creates the production build in `dist/`
+- `npm run serve` - Previews the built app locally
 
 ## Controls
 
-- `W A S D` move
-- `Mouse` aim
-- `Left Click` fire
-- `1 / 2 / 3` switch weapon slots
-- `B` open or close buy menu during freeze time
-- `E` interact, plant, or defuse
-- `Shift` walk
-- `Ctrl` crouch
-- `Space` jump
-- `Tab` scoreboard
+- `W A S D` - Move
+- `Mouse` - Aim
+- `Left Click` - Fire
+- `Right Click` - ADS / Scope
+- `1 / 2 / 3` - Switch weapon slots (Primary, Sidearm, Knife)
+- `R` - Reload
+- `G` - Drop Weapon
+- `B` - Open Buy Menu (during freeze time)
+- `E` - Interact, Plant, or Defuse bomb
+- `Shift` - Walk (increases accuracy, reduces footstep noise)
+- `Ctrl` - Crouch (increases accuracy)
+- `Space` - Jump
+- `Tab` - Scoreboard
 
 ## Project Structure
 
 ```text
 src/
-  ai/                 Tactical director and behavior logic
-  audio/              WebAudio runtime
-  engine/             Loop and input helpers
-  gameplay/           Match and physics systems
-  maps/               Map manifest and loading
-  pages/              React page shell, including the main game prototype
-  rendering/          Renderer utilities and adaptive quality
-  weapons/            Weapon catalog and validation
-tests/                Node-based verification for extracted systems
-public/assets/        Static maps, models, textures, and asset docs
-public/draco/         Draco decoder files for compressed GLB loading
-docs/                 Production notes and implementation plans
+  ai/                 Tactical director, nav meshes, combat state machines, and economy logic
+  audio/              WebAudio runtime and spatial sound management
+  engine/             Fixed-timestep GameLoop and input helpers
+  gameplay/           Core logic for combat (damage, hitboxes), player (movement, recoil), and match rules
+  maps/               Map manifests, loader wrappers, and boundary definitions
+  networking/         PeerJS P2P room management and state sync
+  pages/              React UI shell, main Game loop initialization (`Game.tsx`)
+  rendering/          Three.js visual utilities, scene disposal, and adaptive resolution
+  ui/                 HUD components and scoreboard models
+  weapons/            Weapon metadata catalog (damage, spread, prices)
+tests/                Node-based unit tests for extracted subsystems
+public/assets/        Static maps, models (GLB), and asset documentation
+public/draco/         Draco decoder WASM for fast map loading
 ```
-
-## Implemented Systems
-
-### Gameplay
-
-- 5v5 team setup with CT/T sides
-- Freeze time, live rounds, planted bomb phase, round resolution, halftime logic, and overtime-ready match state in [`src/gameplay/match/MatchRules.ts`](./src/gameplay/match/MatchRules.ts)
-- Economy and loss-bonus handling
-- Buy menu and loadout flow
-- Bomb plant and defuse loop
-- Spectator fallback after death
-
-### AI
-
-- Difficulty-driven bot profiles from `easy` through `pro`
-- Tactical option scoring for cover, reload, engage, rotate, sound investigation, and objective play
-- Enemy memory decay helpers
-
-### Weapons
-
-- Typed weapon catalog for pistols, rifles, SMGs, AWP, knife, and utility
-- Spread, recoil, reload, movement, armor penetration, reward, and utility metadata in [`src/weapons/WeaponData.ts`](./src/weapons/WeaponData.ts)
-
-### Rendering and Audio
-
-- Three.js first-person scene with procedural materials and stylized environment lighting
-- Adaptive pixel-ratio scaling for weaker hardware
-- Lazy WebAudio initialization to avoid eager `AudioContext` startup
-- Draco loader wiring for compressed map assets
-
-### Maps and Assets
-
-- Tactical map manifest for four themes:
-  - Harbor Exchange
-  - Gridlock
-  - Storm Pier
-  - Switchyard
-- Static asset pipeline documented in [`public/assets/README.md`](./public/assets/README.md)
-- Included map dressing assets from Kenney City Kit Roads under CC0
 
 ## Verification
 
@@ -140,23 +116,17 @@ npm run build
 
 ## Deployment
 
-The project is configured for static deployment on Vercel.
+The project is configured for static deployment on **Vercel**.
 
-- Build command: `npm run build`
-- Output directory: `dist`
+- **Build command:** `npm run build`
+- **Output directory:** `dist`
 - Static assets are served from `public/`
 - Draco decoder files must remain available under `/draco/`
 
 ## Roadmap
 
-- Continue extracting responsibilities out of [`src/pages/Game.tsx`](./src/pages/Game.tsx)
-- Move from hardcoded map runtime to manifest-selected map loading
-- Expand grenade and effects runtime
-- Add multiplayer-ready snapshot and prediction primitives
-- Replace one-off visual effects with pooled rendering systems
-- Improve production asset import and optimization pipeline
-
-## Notes
-
-- This repo currently includes `dist/` and `node_modules/` in the working tree, but those should generally stay out of commits for normal development.
-- The prototype is already fun to iterate on, but it is still in an active transition from single-file prototype toward modular tactical FPS architecture.
+- Continue refactoring the main game loop out of `src/pages/Game.tsx` into modular engine components.
+- Enhance the P2P networking with better interpolation and snapshot prediction for smoother multiplayer.
+- Expand visual effects (VFX) utilizing pooled particle systems instead of one-off mesh allocations.
+- Further optimize the map pipeline and physics colliders (e.g., integrating `three-mesh-bvh`).
+- Expand grenade systems (Smokes, Flashes, HE) and related AI tactical logic.
