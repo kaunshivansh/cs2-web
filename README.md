@@ -1,4 +1,4 @@
-# CS2 Web
+# Web Shooter 3D
 
 Live project: [cs2-web-three.vercel.app](https://cs2-web-three.vercel.app)
 
