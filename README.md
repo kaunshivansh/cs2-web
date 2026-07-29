@@ -1,8 +1,8 @@
 # Web Shooter 3D
 
-Live project: [cs2-web-three.vercel.app](https://cs2-web-three.vercel.app)
+Live project: [webshooter3d.vercel.app](https://webshooter3d.vercel.app)
 
-![CS2 Web splash](./public/opengraph.jpg)
+![Web Shooter 3D splash](./public/opengraph.jpg)
 
 A browser-based tactical FPS prototype built with **React**, **TypeScript**, **Three.js**, and **Vite**. 
 
