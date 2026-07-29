@@ -21,13 +21,29 @@ import {
   type AudibleEvent,
 } from '../ai/BotBlackboard';
 import { createBotProfile, type BotDifficulty } from '../ai/TacticalDirector';
+import { moveWithCapsuleCollision, lerpCrouchHeight } from '../gameplay/player/PlayerController';
+import { findHitPart, type BodyPart } from '../gameplay/combat/Hitbox';
+import { computeDamage, type DamageResult } from '../gameplay/combat/CombatSystem';
+import { createAimState, setTarget, updateAim, getAimError, isAimReady, type AimState, type AimDifficulty, AIM_DIFFICULTY_PARAMS } from '../ai/AimSimulator';
+import { createCombatSnapshot, advanceCombatState, shouldFireWeapon, shouldMove, type BotCombatSnapshot, type CombatContext } from '../ai/BotCombatController';
+import { getBotPurchasePlan, updateBotAmmo, shouldBotReload, type TeamEconomy } from '../ai/BotEconomy';
+import { buildNavGraph, findPath, smoothPath as navSmoothPath, findNearestNode, createBotNavState, updateNavState, isChokepointAvailable, distanceVec3, type NavGraph, type NavNode } from '../ai/Navigation';
+import { getRecoilOffset, recoilToRadians, hasFirstShotAccuracy, movementSpreadPenalty, CAMERA_PUNCH_PITCH, CAMERA_PUNCH_RECOVERY_MS } from '../gameplay/player/RecoilPatterns';
 import { audioSystem } from '../audio/AudioSystem';
 import { AdaptiveQualityController } from '../rendering/AdaptiveQuality';
+import { GameRenderer } from '../rendering/Renderer';
 import {
   disposeObject3DResources,
   disposeObject3DResourcesWithOptions,
 } from '../rendering/SceneDisposal';
 import { getTeamVisualPalette } from '../rendering/viewmodel/TeamVisuals';
+import { createWeaponModel } from '../rendering/viewmodel/WeaponModels';
+import { createBotModel } from '../rendering/CharacterLoader';
+import {
+  resolveCharacterBone,
+  resolveCharacterClip,
+  TEAM_OPERATOR_CONFIG,
+} from '../rendering/CharacterRig';
 import { buildAmmoView, buildScoreboardView } from '../ui/hud/ScoreboardModel';
 import { WEAPONS } from '../weapons/WeaponData';
 import { roomManager, type RoomState, type NetworkPlayer } from '../networking/RoomManager';
@@ -90,6 +106,13 @@ export default function Game() {
   const specBarRef = useRef<HTMLDivElement>(null);
   const roundHistRef = useRef<HTMLDivElement>(null);
   const scoreboardRef = useRef<HTMLDivElement>(null);
+  const killstreakRef = useRef<HTMLDivElement>(null);
+  const killstreakTextRef = useRef<HTMLDivElement>(null);
+  const killstreakSubRef = useRef<HTMLDivElement>(null);
+  const lowHpVignetteRef = useRef<HTMLDivElement>(null);
+  const mvpCardRef = useRef<HTMLDivElement>(null);
+  const mvpNameRef = useRef<HTMLDivElement>(null);
+  const mvpReasonRef = useRef<HTMLDivElement>(null);
   // Game bridge refs — written before enterMatch, read by game loop
   const enterMatchRef = useRef<(() => void) | null>(null);
   const gameBridgeRef = useRef<any>(null);
@@ -149,7 +172,10 @@ export default function Game() {
       killfeed: killfeedRef.current!, playerTag: playerTagRef.current!,
       minimap: minimapRef.current!, scope: scopeRef.current!,
       specBar: specBarRef.current!, roundHist: roundHistRef.current!,
-      scoreboard: scoreboardRef.current!
+      scoreboard: scoreboardRef.current!,
+      killstreak: killstreakRef.current!, killstreakText: killstreakTextRef.current!,
+      killstreakSub: killstreakSubRef.current!, lowHpVignette: lowHpVignetteRef.current!,
+      mvpCard: mvpCardRef.current!, mvpName: mvpNameRef.current!, mvpReason: mvpReasonRef.current!
     };
 
     const clamp = (v: number, mn: number, mx: number) => Math.min(mx, Math.max(mn, v));
@@ -192,29 +218,30 @@ export default function Game() {
     const unlockAudio = () => {
       try { audioSystem.unlock(); } catch {}
     };
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x8fa4b2);
-    scene.fog = new THREE.Fog(0x7f95a2, 32, 108);
+    let gameRenderer: GameRenderer;
+    try {
+      gameRenderer = new GameRenderer(dom.game, dom.game.clientWidth, dom.game.clientHeight);
+    } catch {
+      setWebglError(true);
+      return;
+    }
+    const renderer = gameRenderer.renderer;
+    const scene = gameRenderer.scene;
+    const camera = gameRenderer.camera;
 
-    const camera = new THREE.PerspectiveCamera(75, dom.game.clientWidth / dom.game.clientHeight, 0.05, 200);
-    let renderer: THREE.WebGLRenderer;
-    try { renderer = new THREE.WebGLRenderer({ antialias: true, failIfMajorPerformanceCaveat: false }); }
-    catch { setWebglError(true); return; }
-    if (!renderer.getContext()) { setWebglError(true); renderer.dispose(); return; }
+    if (!renderer.getContext()) {
+      setWebglError(true);
+      gameRenderer.dispose();
+      return;
+    }
+
     const adaptiveQuality = new AdaptiveQualityController({
       initialPixelRatio: Math.min(devicePixelRatio, 1.75),
       minPixelRatio: 0.75,
       maxPixelRatio: Math.min(devicePixelRatio, 2),
       targetFps: 60,
     });
-    renderer.setPixelRatio(adaptiveQuality.pixelRatio);
-    renderer.setSize(dom.game.clientWidth, dom.game.clientHeight);
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFShadowMap;
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.08;
-    dom.game.appendChild(renderer.domElement);
+    gameRenderer.setPixelRatio(adaptiveQuality.pixelRatio);
     scene.add(camera);
 
     // Expose core three.js objects for in-page debug overlay tooling
@@ -252,6 +279,17 @@ export default function Game() {
       fragmentShader: `uniform vec3 top,mid,bot;varying vec3 vW;void main(){float h=normalize(vW).y*.5+.5;vec3 c=mix(bot,mid,smoothstep(0.,.38,h));c=mix(c,top,smoothstep(.38,1.,h));gl_FragColor=vec4(c,1.);}`
     });
     scene.add(new THREE.Mesh(skyGeo, skyMat));
+
+    // Shared graphics resources to prevent runtime allocation/lag when shooting/hitting
+    const bloodGeo = new THREE.SphereGeometry(1, 6, 6);
+    const bloodMat = new THREE.MeshBasicMaterial({ color: 0x8b1515 });
+    const impactGeo = new THREE.SphereGeometry(0.055, 7, 7);
+    const impactMatDefault = new THREE.MeshBasicMaterial({ color: 0x27211c });
+    const impactMatBot = new THREE.MeshBasicMaterial({ color: 0x33271d });
+    const tracerPlayerMat = new THREE.LineBasicMaterial({ color: 0xfff0a0, transparent: true, opacity: 0.72 });
+    const tracerPlayerScopedMat = new THREE.LineBasicMaterial({ color: 0xffe8aa, transparent: true, opacity: 0.72 });
+    const tracerTMat = new THREE.LineBasicMaterial({ color: 0xffd59c, transparent: true, opacity: 0.72 });
+    const tracerCTMat = new THREE.LineBasicMaterial({ color: 0x9ad7ff, transparent: true, opacity: 0.72 });
 
     const colliders: { min: THREE.Vector3; max: THREE.Vector3 }[] = [];
     try { (window as any).__GAME_DEBUG__ = (window as any).__GAME_DEBUG__ || {}; (window as any).__GAME_DEBUG__.colliders = colliders; } catch (e) {}
@@ -403,110 +441,7 @@ export default function Game() {
       return g;
     }
 
-    function createWeaponModel(id: string, mode: 'view'|'world' = 'view', team: Team = 'CT') {
-      const M = createWeaponMaterialSet();
-      const g = new THREE.Group(); const sc = mode==='view'?1:0.44; g.scale.setScalar(sc);
-      const muzzle = new THREE.Object3D(); g.add(muzzle);
-      if (mode==='view') g.add(makeHands(team));
-      const p = (geo:THREE.BufferGeometry, mat:THREE.Material, x:number, y:number, z:number, rx=0, ry=0, rz=0) => addMesh(g,geo,mat,x,y,z,rx,ry,rz);
-      const cyl = THREE.CylinderGeometry; const box = THREE.BoxGeometry;
 
-      switch(id) {
-        case 'knife':
-          p(new box(0.04,0.05,0.18), M.gunPoly, 0.14,-0.22,-0.1, 0,0,0.16); // Handle
-          p(new box(0.015,0.02,0.48), M.gunSteel, 0.14,-0.22,-0.48, 0,0,0.04); // Blade main
-          p(new box(0.015,0.04,0.16), M.gunSteel, 0.14,-0.21,-0.64, Math.PI/12,0,0.04); // Blade tip
-          p(new box(0.05,0.02,0.06), M.gunSteel, 0.14,-0.22,-0.24); // Guard
-          muzzle.position.set(0.14,-0.22,-0.78); break;
-
-        case 'usp':
-          p(new box(0.11,0.14,0.48), M.gunPoly, 0.18,-0.21,-0.32); // Lower frame
-          p(new box(0.095,0.09,0.38), M.gunSteel, 0.18,-0.145,-0.28); // Slide
-          p(new cyl(0.026,0.026,0.64,12), M.gunMetal, 0.18,-0.165,-0.82, 0,0,Math.PI/2); // Suppressor
-          p(new box(0.095,0.26,0.15), M.gunPoly, 0.16,-0.33,-0.07,-0.34); // Grip
-          p(new box(0.02,0.015,0.46), M.gunMetal, 0.18,-0.108,-0.27); // Slide top detail
-          muzzle.position.set(0.18,-0.165,-1.14); break;
-
-        case 'deagle':
-          p(new box(0.12,0.14,0.56), M.gunSteel, 0.20,-0.21,-0.33); // Lower frame
-          p(new box(0.14,0.12,0.48), M.gunSteel, 0.20,-0.12,-0.31); // Slide (heavy)
-          p(new box(0.10,0.28,0.17), M.gunPoly, 0.17,-0.36,-0.05,-0.38); // Grip
-          p(new box(0.08,0.06,0.24), M.gunSteel, 0.20,-0.175,-0.68); // Under barrel weight
-          p(new cyl(0.028,0.028,0.06,12), M.gunSteel, 0.20,-0.13,-0.60, 0,0,Math.PI/2); // Barrel tip
-          muzzle.position.set(0.20,-0.13,-0.64); break;
-
-        case 'glock':
-          p(new box(0.10,0.12,0.46), M.gunPoly, 0.18,-0.21,-0.30); // Lower frame
-          p(new box(0.09,0.09,0.38), M.gunSteel, 0.18,-0.150,-0.27); // Slide
-          p(new box(0.09,0.23,0.16), M.gunPoly,   0.16,-0.33,-0.08,-0.34); // Grip
-          p(new box(0.02,0.01,0.40), M.gunSteel, 0.18,-0.100,-0.28); // Slide detail
-          p(new cyl(0.018,0.018,0.04,12), M.gunSteel, 0.18,-0.16,-0.48, 0,0,Math.PI/2); // Barrel tip
-          muzzle.position.set(0.18,-0.16,-0.51); break;
-
-        case 'mp9':
-          p(new box(0.11,0.14,0.52), M.gunPoly, 0.18,-0.21,-0.33); // Body
-          p(new cyl(0.025,0.025,0.52,12), M.gunSteel, 0.19,-0.19,-0.86, 0,0,Math.PI/2); // Barrel + suppressor
-          p(new box(0.08,0.30,0.11), M.gunPoly, 0.15,-0.37,-0.19,-0.14); // Grip
-          p(new box(0.035,0.22,0.16), M.gunSteel, 0.21,-0.36,-0.52, 0.26); // Angled magazine
-          p(new box(0.08,0.22,0.11), M.gunPoly, 0.18,-0.28,-0.60, -0.1); // Foregrip
-          p(new box(0.09,0.06,0.40), M.gunSteel, 0.18,-0.13,-0.40); // Top rail
-          p(new box(0.05,0.05,0.10), M.optic, 0.18,-0.07,-0.30); // Small optic
-          muzzle.position.set(0.19,-0.19,-1.12); break;
-
-        case 'mac10':
-          p(new box(0.11,0.18,0.44), M.gunSteel, 0.18,-0.21,-0.33); // Blocky body
-          p(new cyl(0.038,0.038,0.42,12), M.gunSteel, 0.19,-0.185,-0.77, 0,0,Math.PI/2); // Thick suppressor
-          p(new box(0.08,0.32,0.11), M.gunPoly,   0.15,-0.38,-0.12,-0.11); // Grip
-          p(new box(0.04,0.26,0.14), M.gunSteel, 0.18,-0.38,-0.14, 0); // Straight magazine
-          p(new box(0.035,0.08,0.14), M.gunMetal, 0.18,-0.10,-0.20); // Charging handle
-          p(new box(0.08,0.04,0.22), M.gunSteel, 0.18,-0.18,-0.58); // Cloth strap mount
-          muzzle.position.set(0.18,-0.175,-1.14); break;
-
-        case 'm4a1':
-          p(new box(0.10,0.14,0.58), M.gunMetal, 0.20,-0.21,-0.33); // Receiver
-          p(new cyl(0.026,0.026,0.80,12), M.gunSteel, 0.21,-0.185,-0.96, 0,0,Math.PI/2); // Barrel
-          p(new cyl(0.048,0.048,0.44,14), M.gunMetal, 0.21,-0.185,-1.36, 0,0,Math.PI/2); // Suppressor
-          p(new box(0.08,0.26,0.14), M.gunPoly, 0.16,-0.37,-0.24, 0.16); // Grip
-          p(new box(0.10,0.18,0.30), M.gunPoly,   0.13,-0.23,-0.06); // Stock
-          p(new box(0.08,0.10,0.46), M.gunPoly, 0.20,-0.15,-0.72); // Handguard
-          p(new box(0.05,0.28,0.12), M.gunMetal, 0.20,-0.34,-0.40, -0.1); // Magazine
-          p(new box(0.06,0.055,0.17), M.optic,   0.20,-0.07,-0.48); // Optic Base
-          p(new cyl(0.018,0.018,0.12,12), M.gunSteel, 0.20,-0.07,-0.41, 0,0,Math.PI/2); // Optic Lens
-          p(new box(0.025,0.02,0.17), M.lens,    0.20,-0.07,-0.48); // Lens reflection
-          muzzle.position.set(0.21,-0.185,-1.58); break;
-
-        case 'ak47':
-          p(new box(0.10,0.14,0.58), M.gunMetal, 0.20,-0.21,-0.33); // Receiver
-          p(new cyl(0.022,0.022,0.72,12), M.gunSteel, 0.21,-0.185,-0.92, 0,0,Math.PI/2); // Barrel
-          p(new cyl(0.012,0.012,0.68,8), M.gunSteel, 0.21,-0.14,-0.88, 0,0,Math.PI/2); // Gas tube
-          p(new box(0.08,0.26,0.12), M.gunWood, 0.16,-0.38,-0.24, 0.27,0,-0.06); // Grip
-          p(new box(0.10,0.17,0.36), M.gunWood, 0.12,-0.22,-0.05); // Stock
-          p(new box(0.09,0.10,0.32), M.gunWood, 0.21,-0.16,-0.70); // Handguard
-          p(new box(0.05,0.30,0.13), M.gunSteel, 0.20,-0.38,-0.46, -0.25); // Curved Magazine
-          p(new box(0.05,0.08,0.13), M.gunSteel, 0.20,-0.46,-0.48, -0.45); // Mag curve tip
-          p(new cyl(0.016,0.016,0.10,8), M.gunSteel, 0.21,-0.185,-0.87, Math.PI/2,0,0); // Sight block
-          muzzle.position.set(0.21,-0.185,-1.36); break;
-
-        case 'awp':
-          p(new box(0.12,0.15,0.84), M.gunPoly, 0.21,-0.21,-0.30); // Main chassis
-          p(new cyl(0.028,0.028,1.24,12), M.gunSteel, 0.22,-0.165,-1.10, 0,0,Math.PI/2); // Heavy barrel
-          p(new cyl(0.038,0.038,0.14,12), M.gunSteel, 0.22,-0.165,-1.76, 0,0,Math.PI/2); // Muzzle brake
-          p(new cyl(0.048,0.048,0.64,16), M.optic, 0.19,-0.04,-0.54, 0,0,Math.PI/2); // Scope tube
-          p(new cyl(0.056,0.056,0.08,16), M.optic, 0.19,-0.04,-0.84, 0,0,Math.PI/2); // Scope front bell
-          p(new box(0.024,0.02,0.64), M.lens,    0.19,-0.04,-0.54); // Lens reflection
-          p(new box(0.09,0.22,0.14), M.gunPoly, 0.18,-0.38,-0.26, 0.1); // Grip
-          p(new box(0.14,0.17,0.48), M.gunPoly,  0.09,-0.23, 0.02); // Stock
-          p(new box(0.10,0.08,0.52), M.gunPoly, 0.21,-0.13,-0.74); // Forend
-          p(new box(0.06,0.16,0.14), M.gunSteel, 0.21,-0.30,-0.42); // Mag
-          muzzle.position.set(0.22,-0.165,-1.84); break;
-
-        default:
-          p(new box(0.10,0.12,0.48), M.gunMetal, 0.18,-0.21,-0.32);
-          muzzle.position.set(0.18,-0.19,-0.90);
-      }
-      shadowify(g);
-      return { group: g, muzzle };
-    }
 
     const minimapWalls: {x:number,z:number,w:number,d:number}[] = [];
 
@@ -516,7 +451,7 @@ export default function Game() {
 
     const gltfLoader = new GLTFLoader();
     const dracoLoader = new DRACOLoader();
-    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+    dracoLoader.setDecoderPath('/draco/');
     gltfLoader.setDRACOLoader(dracoLoader);
 
     const characterCache = new Map<string, { scene: THREE.Group, animations: THREE.AnimationClip[] }>();
@@ -695,6 +630,55 @@ export default function Game() {
         };
       } catch (e) {}
 
+      // Generate Navigation Graph for pathfinding
+      try {
+        const nodes: NavNode[] = [];
+        const spacing = 3.5;
+        
+        // 1. Generate walkable nodes
+        for (let x = -56; x <= 56; x += spacing) {
+          for (let z = -56; z <= 56; z += spacing) {
+            if (!blockedAt(x, z, 0.46)) {
+              const id = `n_${x.toFixed(1)}_${z.toFixed(1)}`;
+              const pos = { x, y: CT_SPAWN_POS.y, z };
+              nodes.push({
+                id,
+                position: pos,
+                connections: [],
+                coverScore: 0.5,
+                siteProximity: {
+                  A: distanceVec3(pos, A_SITE),
+                  B: distanceVec3(pos, B_SITE),
+                }
+              });
+            }
+          }
+        }
+
+        // 2. Connect neighbor nodes
+        const maxConnectDist = spacing * 1.45;
+        for (let i = 0; i < nodes.length; i++) {
+          const nodeA = nodes[i];
+          for (let j = i + 1; j < nodes.length; j++) {
+            const nodeB = nodes[j];
+            const dist = distanceVec3(nodeA.position, nodeB.position);
+            if (dist <= maxConnectDist) {
+              const startVec = new THREE.Vector3(nodeA.position.x, nodeA.position.y, nodeA.position.z);
+              const endVec = new THREE.Vector3(nodeB.position.x, nodeB.position.y, nodeB.position.z);
+              if (lineClear2D(startVec, endVec, 0.42)) {
+                nodeA.connections.push(nodeB.id);
+                nodeB.connections.push(nodeA.id);
+              }
+            }
+          }
+        }
+
+        navGraph = buildNavGraph(nodes);
+        console.log(`[NAV] Generated NavGraph with ${nodes.length} nodes and ${navGraph.chokepoints.size} chokepoints.`);
+      } catch (err) {
+        console.warn("Failed to generate nav graph:", err);
+      }
+
       setMapLoaded(true); mapLoadedRef.current = true;
     }
 
@@ -742,7 +726,7 @@ export default function Game() {
       const siteBDef = mapDef.bombSites.find(s => s.id === 'B');
       if (siteBDef) B_SITE.set(siteBDef.position[0], siteBDef.position[1], siteBDef.position[2]);
 
-      const mapUrl = '/assets/models/city.glb';
+      const mapUrl = `${mapDef.assetRoot}${mapDef.id}.glb`;
       setLoadingStatus('DOWNLOADING MAP');
       gltfLoader.load(mapUrl, (gltf) => {
         cityGroup = gltf.scene;
@@ -851,11 +835,15 @@ export default function Game() {
       scoped:false, reloading:false, reloadT:0, reloadWeapon:null, shootCD:0,
       recoilIdx:0, alive:true, team:'CT', hasBomb:false, jumpLock:false, jumpBuffer:0, landBob:0, switchBob:1,
       stepNoiseCd:0,
-      kills:0, deaths:0,
+      kills:0, deaths:0, roundKills:0, roundHeadshots:0,
+      inspecting: false, inspectT: 0,
       shooting: false,
       mixer: null as THREE.AnimationMixer | null,
       actions: { idle: null, walk: null, run: null },
       currentAction: null,
+      timeSinceStationary: 0,
+      timeSinceJump: 0,
+      cameraPunch: 0,
     };
     try { (window as any).__GAME_DEBUG__ = (window as any).__GAME_DEBUG__ || {}; (window as any).__GAME_DEBUG__.player = player; } catch (e) {}
     const state: any = {
@@ -866,6 +854,10 @@ export default function Game() {
     };
     gameBridgeRef.current = { state };
     let soundEvents: AudibleEvent[] = [];
+    let mouseVelX = 0;
+    let mouseVelY = 0;
+    let navGraph: NavGraph | null = null;
+    const persistentBotStats = new Map<string, { kills: number, deaths: number, money: number }>();
 
     function emitSoundEvent(team: Team | 'neutral', position: THREE.Vector3, kind: AudibleEvent['kind'], loudness: number) {
       soundEvents.push({
@@ -998,108 +990,7 @@ export default function Game() {
       else if(state.started&&player.alive) requestAimLock();
     }
 
-    const loadingPromises = new Map<string, Promise<any>>();
-
-    function createBotModel(team:string, weaponId:string){
-      const isCT = team==='CT';
-      const g = new THREE.Group();
-      const visualGroup = new THREE.Group();
-      g.add(visualGroup);
-      const res: any = { 
-        group: g, visualGroup: visualGroup, body: null, head: null, weaponMount: null, 
-        mixer: null, actions: { idle: null, walk: null, run: null }, 
-        currentAction: null 
-      };
-
-      // AUTH HITBOXES
-      const hitBoxMat = new THREE.MeshBasicMaterial({ visible: false });
-      const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.32,0.62,5,12), hitBoxMat); 
-      torso.position.y=1.0; visualGroup.add(torso); res.body = torso;
-      const headGroup = new THREE.Group(); headGroup.position.set(0,1.60,0.05); visualGroup.add(headGroup); res.head = headGroup;
-      const faceHitbox = new THREE.Mesh(new THREE.SphereGeometry(0.18,12,12), hitBoxMat); 
-      faceHitbox.position.set(0,0.08,0); headGroup.add(faceHitbox);
-
-      // MOUNT
-      const weaponMount = new THREE.Group(); weaponMount.position.set(0.18,0.98,0.28); visualGroup.add(weaponMount);
-      res.weaponMount = weaponMount;
-      const worldWeapon = createWeaponModel(weaponId,'world', team as Team);
-      worldWeapon.group.rotation.set(0,-Math.PI/2,Math.PI/2);
-      worldWeapon.group.position.set(0,0.02,0.2); worldWeapon.group.scale.multiplyScalar(0.88);
-      weaponMount.add(worldWeapon.group);
-
-      // INITIAL VISUALS (While external models load)
-      const fallback = new THREE.Group();
-      const pal = getTeamVisualPalette(team as Team);
-      addMesh(fallback, new THREE.CapsuleGeometry(0.3,0.6,4,8), new THREE.MeshStandardMaterial({color:pal.uniformColor}), 0,1,0);
-      addMesh(fallback, new THREE.SphereGeometry(0.18,10,10), new THREE.MeshStandardMaterial({color:pal.skinColor}), 0,1.68,0.05);
-      visualGroup.add(fallback);
-
-      const modelName = isCT ? 'sas__cs2_agent_model_blue' : 'elf_female_soldier';
-      const setupInstance = (data: any) => {
-        if (!data) return;
-        fallback.visible = false;
-        const model = SkeletonUtils.clone(data.scene);
-        let hand: THREE.Object3D | null = null;
-        model.traverse(o => {
-          const n = o.name.toLowerCase();
-          if (!hand && (n.includes('righthand')||n.includes('hand_r')||n.includes('r_hand'))) hand = o;
-        });
-        if (hand) {
-          (hand as THREE.Object3D).add(weaponMount);
-          weaponMount.position.set(0, 0, 0); 
-          weaponMount.rotation.set(Math.PI/2, 0, -Math.PI/2);
-          weaponMount.scale.setScalar(2.2); 
-        }
-        model.rotation.y = Math.PI; 
-        // Only set up animation mixer if proper gameplay animations exist
-        // The CS2 models have internal eye_test/tools_preview tracks that break rigging
-        const idleClip = data.animations.find((a:any) => a.name.toLowerCase().includes('idle'));
-        const walkClip = data.animations.find((a:any) => a.name.toLowerCase().includes('walk'));
-        const runClip = data.animations.find((a:any) => a.name.toLowerCase().includes('run'));
-        if (idleClip || walkClip || runClip) {
-          const m = new THREE.AnimationMixer(model); res.mixer = m;
-          const iC = idleClip || walkClip || runClip!;
-          const wC = walkClip || runClip || iC;
-          const rC = runClip || walkClip || iC;
-          res.actions.idle = m.clipAction(iC);
-          res.actions.walk = m.clipAction(wC);
-          res.actions.run = m.clipAction(rC);
-
-          for (const key in res.actions) {
-            const action = (res.actions as Record<string, any>)[key];
-            if (action) {
-              action.enabled = true;
-              action.setEffectiveTimeScale(1);
-              action.setEffectiveWeight(key === 'idle' ? 1.0 : 0.0);
-              action.play();
-            }
-          }
-          res.currentAction = res.actions.idle;
-          res.currentActionName = 'idle';
-        }
-        const b3 = new THREE.Box3().setFromObject(model); const sz = b3.getSize(new THREE.Vector3());
-        model.scale.setScalar(1.82 / (sz.y || 1));
-        b3.setFromObject(model); model.position.y = -b3.min.y;
-        visualGroup.add(model);
-      };
-
-      const cached = characterCache.get(modelName);
-      if (cached) setupInstance(cached);
-      else {
-        if (!loadingPromises.has(modelName)) {
-          const p = new Promise(resolve => {
-            gltfLoader.load(`/assets/models/${modelName}.glb`, (gltf) => {
-              gltf.scene.traverse(c => { if((c as THREE.Mesh).isMesh) { c.castShadow=c.receiveShadow=true; const m=(c as THREE.Mesh).material as any; if(m.map)m.map.colorSpace=THREE.SRGBColorSpace; } });
-              const d = { scene: gltf.scene, animations: gltf.animations };
-              characterCache.set(modelName, d); resolve(d);
-            }, undefined, () => resolve(null));
-          });
-          loadingPromises.set(modelName, p);
-        }
-        loadingPromises.get(modelName)!.then(setupInstance);
-      }
-      return res;
-    }
+    const createBotModelHelper = (team: string, weaponId: string) => createBotModel(team, weaponId, gltfLoader);
 
     // ─── BOT SYSTEM ─────────────────────────────────────────────────────────────
     function botLoadout(team:string){
@@ -1117,17 +1008,51 @@ export default function Game() {
     }
 
     function makeBot(team:string,pos:THREE.Vector3,name:string,role:string){
-      const weaponId=botLoadout(team);
+      // Get/Initialize persistent stats
+      const stats = persistentBotStats.get(name) || { kills: 0, deaths: 0, money: 800 };
+      persistentBotStats.set(name, stats);
+
+      // Determine team economy
+      const streak = team === 'CT' ? state.ctLossStreak : state.tLossStreak;
+      let shouldFullSave = false;
+      let isEcoRound = false;
+      if (state.round === 1) {
+        isEcoRound = true;
+      } else if (streak >= 2 && Math.random() < 0.5) {
+        shouldFullSave = true;
+      } else if (streak >= 1 && Math.random() < 0.6) {
+        isEcoRound = true;
+      }
+      
+      const teamEco: TeamEconomy = {
+        shouldFullSave,
+        isEcoRound,
+        averageTeamMoney: shouldFullSave ? 1000 : isEcoRound ? 2000 : 5000,
+      };
+
+      const plan = getBotPurchasePlan(stats.money, team as 'CT' | 'T', teamEco, state.round);
+      
+      // Deduct weapon and armor costs
+      let cost = 0;
+      if (plan.weapon !== 'knife') {
+        const weaponPrice = WEAPONS[plan.weapon]?.price ?? 200;
+        cost += weaponPrice;
+      }
+      if (plan.armor) cost += 650;
+      if (plan.helmet) cost += 350;
+      stats.money = Math.max(0, stats.money - cost);
+
+      const weaponId = plan.weapon === 'knife' ? (team === 'CT' ? 'usp' : 'glock') : plan.weapon;
       const profile = createBotProfile(botDifficulty(), Math.random());
-      const model=createBotModel(team,weaponId);
+      const model = createBotModel(team, weaponId, gltfLoader);
       model.group.position.copy(pos); scene.add(model.group);
       return {
         id: 'bot-' + Math.random().toString(36).substr(2, 9),
         obj:model.group, visualGroup: model.visualGroup, body:model.body, head:model.head, weaponMount:model.weaponMount,
         mixer: (model as any).mixer as THREE.AnimationMixer | null,
-        team, name, role, hp:100, armor:weaponId==='glock'?0:100, helmet:weaponId!=='glock',
+        team, name, role, hp:100, armor:plan.armor ? 100 : 0, helmet:plan.helmet,
         alive:true, weapon:weaponId, ammoMag:WEAPONS[weaponId].magSize, reloadT:0,
-        kills:0, deaths:0,
+        kills:stats.kills, deaths:stats.deaths, money:stats.money,
         difficulty:profile.difficulty,
         fireCD:rand(0.1,0.35), reactionT:rand(profile.reactionTime*0.75,profile.reactionTime*1.25),
         aimDir:vec(0,0,-1),
@@ -1173,6 +1098,10 @@ export default function Game() {
         navRepathAt:0,
         navStuckT:0,
         navLastPos:pos.clone(),
+        aimState: createAimState(),
+        combatSnapshot: createCombatSnapshot('patrolling'),
+        navState: createBotNavState(pos),
+        spine: (model as any).spine || null,
       };
     }
 
@@ -1336,35 +1265,114 @@ export default function Game() {
     // ─── COMBAT HELPERS ─────────────────────────────────────────────────────────
     const hitmarkT: Record<string,any> = {};
     function showHitmark(headshot = false){
-      dom.hitmark.style.opacity='1';clearScheduledTimeout(hitmarkT.hm);hitmarkT.hm=scheduleTimeout(()=>dom.hitmark.style.opacity='0',130);
-      dom.crosshair.classList.add('game-crosshair-hit');clearScheduledTimeout(hitmarkT.cx);hitmarkT.cx=scheduleTimeout(()=>dom.crosshair.classList.remove('game-crosshair-hit'),95);
-      dom.hitmark.classList.toggle('game-hitmark-head', headshot);
-      clearScheduledTimeout(hitmarkT.hsx);hitmarkT.hsx=scheduleTimeout(()=>dom.hitmark.classList.remove('game-hitmark-head'),180);
+      dom.hitmark.style.opacity='1';
+      dom.hitmark.style.transform='translate(-50%,-50%) scale(' + (headshot ? '1.4' : '1.1') + ')';
+      clearScheduledTimeout(hitmarkT.hm);
+      hitmarkT.hm=scheduleTimeout(()=>{
+        dom.hitmark.style.opacity='0';
+        dom.hitmark.style.transform='translate(-50%,-50%) scale(1)';
+      }, 140);
+      dom.crosshair.classList.add('game-crosshair-hit');
+      clearScheduledTimeout(hitmarkT.cx);
+      hitmarkT.cx=scheduleTimeout(()=>dom.crosshair.classList.remove('game-crosshair-hit'), 95);
+      if (headshot) {
+        audioSystem.playHeadshotDink();
+      }
     }
+
     function showDamage(){
-      dom.damage.style.boxShadow='inset 0 0 140px rgba(255,0,0,.65)';clearScheduledTimeout(hitmarkT.dmg);hitmarkT.dmg=scheduleTimeout(()=>dom.damage.style.boxShadow='inset 0 0 120px rgba(255,0,0,0)',320);
+      dom.damage.style.boxShadow='inset 0 0 160px rgba(239,68,68,.75)';
+      clearScheduledTimeout(hitmarkT.dmg);
+      hitmarkT.dmg=scheduleTimeout(()=>dom.damage.style.boxShadow='inset 0 0 120px rgba(255,0,0,0)', 350);
     }
+
+    function triggerKillstreakBanner(text: string, sub: string) {
+      if (!dom.killstreak || !dom.killstreakText || !dom.killstreakSub) return;
+      dom.killstreakText.textContent = text;
+      dom.killstreakSub.textContent = sub;
+      dom.killstreak.classList.add('show');
+      clearScheduledTimeout(hitmarkT.ks);
+      hitmarkT.ks = scheduleTimeout(() => {
+        dom.killstreak.classList.remove('show');
+      }, 2400);
+    }
+
+    function showMvpCard(winnerTeam: string, name: string, reason: string) {
+      if (!dom.mvpCard || !dom.mvpName || !dom.mvpReason) return;
+      dom.mvpName.textContent = name;
+      dom.mvpReason.textContent = reason;
+      dom.mvpCard.classList.add('show');
+      clearScheduledTimeout(hitmarkT.mvp);
+      hitmarkT.mvp = scheduleTimeout(() => {
+        dom.mvpCard.classList.remove('show');
+      }, 4200);
+    }
+
     function muzzleFlash(){
       dom.flash.style.opacity='0.14';clearScheduledTimeout(hitmarkT.fl);hitmarkT.fl=scheduleTimeout(()=>dom.flash.style.opacity='0',45);
-      if(activeViewMuzzle){ const l=new THREE.PointLight(0xffd7a4,2.0,5.5,2);l.position.copy(activeViewMuzzle.position);viewModel.add(l);scheduleTimeout(()=>viewModel.remove(l),38); }
+      if(activeViewMuzzle){ const l=new THREE.PointLight(0xffd7a4,2.5,6.0,2);l.position.copy(activeViewMuzzle.position);viewModel.add(l);scheduleTimeout(()=>viewModel.remove(l),38); }
     }
+
+    function spawnMuzzleFlashLight(position: THREE.Vector3, direction: THREE.Vector3) {
+      const flashPos = position.clone().addScaledVector(direction, 0.45);
+      const light = new THREE.PointLight(0xffaa44, 4.8, 8.5);
+      light.position.copy(flashPos);
+      scene.add(light);
+      scheduleTimeout(() => {
+        scene.remove(light);
+        light.dispose();
+      }, 35);
+    }
+
     function spawnTracer(a:THREE.Vector3,b:THREE.Vector3,color=0xfff0a0){
       const geo=new THREE.BufferGeometry().setFromPoints([a,b]);
-      const mat=new THREE.LineBasicMaterial({color,transparent:true,opacity:0.72});
+      let mat = tracerPlayerMat;
+      if (color === 0xffe8aa) mat = tracerPlayerScopedMat;
+      else if (color === 0xffd59c) mat = tracerTMat;
+      else if (color === 0x9ad7ff) mat = tracerCTMat;
       const line=new THREE.Line(geo,mat); scene.add(line);
-      scheduleTimeout(()=>{scene.remove(line);geo.dispose();mat.dispose();},75);
+      scheduleTimeout(()=>{
+        scene.remove(line);
+        geo.dispose();
+      },75);
     }
+
     function spawnImpact(pt:THREE.Vector3,c=0x27211c){
-      const m=new THREE.Mesh(new THREE.SphereGeometry(0.055,7,7),new THREE.MeshBasicMaterial({color:c}));
-      m.position.copy(pt);scene.add(m);scheduleTimeout(()=>{scene.remove(m);disposeObject3DResources(m);},5000);
+      const mat = (c === 0x33271d) ? impactMatBot : impactMatDefault;
+      const m=new THREE.Mesh(impactGeo,mat);
+      m.position.copy(pt);scene.add(m);
+      
+      // Spark burst VFX
+      const sparksGroup = new THREE.Group();
+      sparksGroup.position.copy(pt);
+      const sparkMat = new THREE.MeshBasicMaterial({ color: 0xffcc44 });
+      for (let i = 0; i < 5; i++) {
+        const spark = new THREE.Mesh(new THREE.SphereGeometry(0.02, 4, 4), sparkMat);
+        spark.position.set(rand(-0.05, 0.05), rand(-0.05, 0.05), rand(-0.05, 0.05));
+        sparksGroup.add(spark);
+      }
+      scene.add(sparksGroup);
+
+      scheduleTimeout(()=>{
+        scene.remove(m);
+        scene.remove(sparksGroup);
+        disposeObject3DResources(sparksGroup);
+      },3000);
     }
+
     function spawnBlood(pt:THREE.Vector3){
       const g=new THREE.Group();
-      for(let i=0;i<7;i++){
-        const p=new THREE.Mesh(new THREE.SphereGeometry(0.032+Math.random()*0.028,6,6),new THREE.MeshBasicMaterial({color:0x8b1515}));
-        p.position.set(rand(-0.1,0.1),rand(-0.06,0.10),rand(-0.1,0.1));g.add(p);
+      for(let i=0;i<10;i++){
+        const p=new THREE.Mesh(bloodGeo,bloodMat);
+        p.scale.setScalar(0.038 + Math.random() * 0.035);
+        p.position.set(rand(-0.15,0.15),rand(-0.08,0.15),rand(-0.15,0.15));
+        g.add(p);
       }
-      g.position.copy(pt);scene.add(g);scheduleTimeout(()=>{scene.remove(g);disposeObject3DResources(g);},600);
+      g.position.copy(pt);scene.add(g);
+      scheduleTimeout(()=>{
+        scene.remove(g);
+        disposeObject3DResources(g);
+      },650);
     }
     function getCameraDir(){ const v=new THREE.Vector3(0,0,-1);v.applyEuler(new THREE.Euler(player.pitch,player.yaw,0,'YXZ'));return v; }
 
@@ -1387,26 +1395,40 @@ export default function Game() {
       raycaster.set(origin,dir);raycaster.far=range;
       let best:any=null;
       const shooterTeam = shooter === 'player' ? player.team : shooter.team;
+      
+      // Check hits on bots using AABB hitboxes
       for(const bot of bots){
         if(!bot.alive||bot===shooter||bot.team===shooterTeam)continue;
-        const hh=raycaster.intersectObject(bot.head,true)[0];
-        const bh=raycaster.intersectObject(bot.body,true)[0];
-        const hit=hh&&(!bh||hh.distance<bh.distance)?{dist:hh.distance,bot,part:'head',point:hh.point}:bh?{dist:bh.distance,bot,part:'body',point:bh.point}:null;
-        if(hit&&(!best||hit.dist<best.dist))best=hit;
-      }
-      if(shooter!=='player'&&player.alive&&shooter.team!==player.team){
-        const pb=tempBox.set(new THREE.Vector3(player.pos.x-0.34,player.pos.y-EYE,player.pos.z-0.34),new THREE.Vector3(player.pos.x+0.34,player.pos.y+0.2,player.pos.z+0.34));
-        const ph=raycaster.ray.intersectBox(pb,new THREE.Vector3());
-        if(ph){const d=origin.distanceTo(ph);const isH=ph.y>player.pos.y-0.12;if(!best||d<best.dist)best={dist:d,isPlayer:true,part:isH?'head':'body',point:ph};}
+        const hitPart = findHitPart(origin, dir, bot.obj.position);
+        if (hitPart) {
+          const hitPoint = origin.clone().addScaledVector(dir, hitPart.distance);
+          const hit = { dist: hitPart.distance, bot, part: hitPart.part, point: hitPoint };
+          if (!best || hit.dist < best.dist) best = hit;
+        }
       }
       
-      // Multiplayer remote players hit detection
+      // Check hits on local player
+      if(shooter!=='player'&&player.alive&&shooter.team!==player.team){
+        const feetY = player.pos.y - (player.height || (player.crouch ? CROUCH_HEIGHT : PLAYER_HEIGHT));
+        const playerBase = new THREE.Vector3(player.pos.x, feetY, player.pos.z);
+        const hitPart = findHitPart(origin, dir, playerBase);
+        if (hitPart) {
+          const hitPoint = origin.clone().addScaledVector(dir, hitPart.distance);
+          if (!best || hitPart.distance < best.dist) {
+            best = { dist: hitPart.distance, isPlayer: true, part: hitPart.part, point: hitPoint };
+          }
+        }
+      }
+      
+      // Check hits on remote players
       for(const [id, remote] of remotePlayers.entries()) {
          if (remote.hp <= 0 || remote.team === shooterTeam) continue;
-         const hh=raycaster.intersectObject(remote.head,true)[0];
-         const bh=raycaster.intersectObject(remote.body,true)[0];
-         const hit=hh&&(!bh||hh.distance<bh.distance)?{dist:hh.distance,remoteId: id, remote, part:'head',point:hh.point}:bh?{dist:bh.distance,remoteId: id, remote, part:'body',point:bh.point}:null;
-         if(hit&&(!best||hit.dist<best.dist))best=hit;
+         const hitPart = findHitPart(origin, dir, remote.obj.position);
+         if (hitPart) {
+           const hitPoint = origin.clone().addScaledVector(dir, hitPart.distance);
+           const hit = { dist: hitPart.distance, remoteId: id, remote, part: hitPart.part, point: hitPoint };
+           if (!best || hit.dist < best.dist) best = hit;
+         }
       }
 
       for(const c of colliders){
@@ -1416,7 +1438,7 @@ export default function Game() {
       return best;
     }
 
-    function addKillfeed(killer:any,victim:any,weapon:string){
+    function addKillfeed(killer:any,victim:any,weapon:string, headshot = false){
       const e=document.createElement('div');e.className='game-kf';
       const killerName = document.createElement('span');
       killerName.className = 'game-kf-a';
@@ -1425,27 +1447,50 @@ export default function Game() {
       const weaponName = document.createElement('span');
       weaponName.className = 'game-kf-b';
       weaponName.textContent = `[${weapon}]`;
+      const hsSpan = document.createElement('span');
+      if (headshot) {
+        hsSpan.className = 'game-kf-hs';
+        hsSpan.textContent = ' 🎯';
+      }
       const victimName = document.createElement('span');
       victimName.className = 'game-kf-a';
       victimName.style.color = victim.team==='CT'?'#87b9ff':'#f0a366';
       victimName.textContent = victim.name || 'YOU';
-      e.append(killerName, weaponName, victimName);
+      e.append(killerName, weaponName, hsSpan, victimName);
       dom.killfeed.appendChild(e);scheduleTimeout(()=>e.remove(),5000);
     }
 
-    function damageBot(bot:any,dmg:number,w:any,killer:any,part:string){
+    function applyDamageToBot(bot:any,dmg:number,remainingArmor:number,w:any,killer:any,part:string,hitPoint:THREE.Vector3){
       if(!bot.alive)return;
-      bot.hp-=applyArmor(bot,dmg,w,part);
+      const isHeadshot = part === 'head';
+      bot.hp = Math.max(0, bot.hp - dmg);
+      bot.armor = remainingArmor;
       bot.damagedT=0;
       if(bot.hp<=0){
         bot.alive=false;bot.obj.visible=false;
         bot.deaths++;
-        if(killer==='player') player.kills++;
+        if(killer==='player') {
+          player.kills++;
+          player.roundKills++;
+          if (isHeadshot) player.roundHeadshots++;
+
+          // Kill chime & streak announcers
+          audioSystem.playKillChime(player.roundKills);
+          let bannerText = '';
+          const subText = `ELIMINATED ${bot.name}`;
+          if (player.roundKills === 2) { bannerText = '★ DOUBLE KILL ★'; audioSystem.playAnnouncerVoice('doubleKill'); }
+          else if (player.roundKills === 3) { bannerText = '🔥 TRIPLE KILL 🔥'; audioSystem.playAnnouncerVoice('tripleKill'); }
+          else if (player.roundKills === 4) { bannerText = '⚡ QUAD KILL ⚡'; audioSystem.playAnnouncerVoice('quadKill'); }
+          else if (player.roundKills >= 5) { bannerText = '👑 ACE - 5K RAMPAGE! 👑'; audioSystem.playAnnouncerVoice('ace'); }
+          else if (isHeadshot) { bannerText = '🎯 HEADSHOT!'; audioSystem.playAnnouncerVoice('headshot'); }
+
+          if (bannerText) triggerKillstreakBanner(bannerText, subText);
+        }
         else if(killer?.kills !== undefined) killer.kills++;
         if(bot.hasBomb){const p=bot.obj.position.clone();const bY=bot.obj.position.y;droppedBomb={pos:p,baseY:bY};spawnDroppedBomb(p,bY);}
         if(bot.weapon!=='knife') createDroppedWeapon(bot.weapon,bot.obj.position.clone(),bot.ammoMag,0, bot.obj.position.y);
-        spawnBlood(part==='head'?bot.head.getWorldPosition(new THREE.Vector3()):bot.body.getWorldPosition(new THREE.Vector3()));
-        addKillfeed({name:killer==='player'?'YOU':killer.name,team:killer==='player'?player.team:killer.team},bot,w.name);
+        spawnBlood(hitPoint);
+        addKillfeed({name:killer==='player'?'YOU':killer.name,team:killer==='player'?player.team:killer.team},bot,w.name, isHeadshot);
         if(killer==='player')player.money=Math.min(16000,player.money+(w.reward||300));
         // Alert teammates
         const radius=20;
@@ -1460,15 +1505,21 @@ export default function Game() {
       updateHUD();
     }
 
-    function damagePlayer(dmg:number,byBot:any,w:any,part:string){
+    function damagePlayerWithDetails(dmg:number,remainingArmor:number,byBot:any,w:any,part:string){
       if(!player.alive)return;
-      player.hp-=applyArmor(player,dmg,w,part);showDamage();
+      player.hp = Math.max(0, player.hp - dmg);
+      player.armor = remainingArmor;
+      player.inspecting = false; player.inspectT = 0; // Cancel weapon inspect on hit
+      showDamage();
+      if (player.hp > 0 && player.hp < 30) {
+        audioSystem.playLowHpHeartbeat();
+      }
       if(player.hp<=0){
         player.alive=false;player.hp=0;player.scoped=false;document.exitPointerLock();
         player.deaths++;
         if(player.hasBomb){player.hasBomb=false;const p=player.pos.clone();const bY=player.pos.y-EYE;droppedBomb={pos:p,baseY:bY};spawnDroppedBomb(p,bY);}
         if(byBot?.kills !== undefined) byBot.kills++;
-        addKillfeed({name:byBot.name,team:byBot.team},{name:'YOU',team:player.team},w.name);
+        addKillfeed({name:byBot.name,team:byBot.team},{name:'YOU',team:player.team},w.name, part==='head');
         checkRoundEnd();
       }
       updateHUD();
@@ -1513,11 +1564,16 @@ export default function Game() {
         if(item){e.preventDefault();buyItem(item);return;}
         if(e.code==='Escape'){setBuyOpen(false);return;}
       }
-      if(e.code==='Digit1')equipSlot('primary');
-      if(e.code==='Digit2')equipSlot('sidearm');
-      if(e.code==='Digit3')equipSlot('knife');
-      if(e.code==='KeyR')reload();
-      if(e.code==='KeyG')dropCurrentWeapon();
+      if(e.code==='Digit1'){ player.inspecting=false; player.inspectT=0; equipSlot('primary'); }
+      if(e.code==='Digit2'){ player.inspecting=false; player.inspectT=0; equipSlot('sidearm'); }
+      if(e.code==='Digit3'){ player.inspecting=false; player.inspectT=0; equipSlot('knife'); }
+      if(e.code==='KeyR'){ player.inspecting=false; player.inspectT=0; reload(); }
+      if(e.code==='KeyG'){ player.inspecting=false; player.inspectT=0; dropCurrentWeapon(); }
+      if(e.code==='KeyF'&&player.alive&&!player.scoped&&!player.reloading){
+        player.inspecting = true;
+        player.inspectT = 0;
+        audioSystem.playInspectSound();
+      }
       if(e.code==='KeyE')interactPressed=true;
       // Spectator: cycle through alive teammates when dead
       if(!player.alive&&state.started){
@@ -1530,7 +1586,15 @@ export default function Game() {
     const onMU=(e:MouseEvent)=>{ if(e.button===0){mouseDown=false;mousePressed=false;player.recoilIdx=Math.max(0,player.recoilIdx-1);} };
     const onPD=(e:PointerEvent)=>{ unlockAudio(); if(e.button===2){e.preventDefault();const w=activeWeapon();if(w.scoped){player.scoped=!player.scoped;playScopeToggle(player.scoped);}} };
     const onCM=(e:MouseEvent)=>{ if(e.target===renderer.domElement)e.preventDefault(); };
-    const onMM=(e:MouseEvent)=>{ if(!mouseLocked)return;const s=0.0022;player.yaw-=e.movementX*s;player.pitch-=e.movementY*s;player.pitch=clamp(player.pitch,-Math.PI/2+0.01,Math.PI/2-0.01); };
+    const onMM=(e:MouseEvent)=>{
+      if(!mouseLocked)return;
+      const s=0.0022;
+      player.yaw-=e.movementX*s;
+      player.pitch-=e.movementY*s;
+      player.pitch=clamp(player.pitch,-Math.PI/2+0.01,Math.PI/2-0.01);
+      mouseVelX += e.movementX;
+      mouseVelY += e.movementY;
+    };
     const onPLC=()=>{ mouseLocked=document.pointerLockElement===renderer.domElement; };
     addEventListener('keydown',onKD);addEventListener('keyup',onKU);
     addEventListener('mousedown',onMD);addEventListener('mouseup',onMU);
@@ -1631,6 +1695,8 @@ export default function Game() {
       player.pitch-=computePitchKick(w, player.recoilIdx);
       player.pitch=clamp(player.pitch,-Math.PI/2+0.01,Math.PI/2-0.01);
       player.recoilIdx=advanceRecoilIndex(w, player.recoilIdx);
+      player.cameraPunch = CAMERA_PUNCH_PITCH;
+      
       const spd=hspd(player.vel),mr=clamp(spd/(w.moveSpeed||5),0,1.4);
       const spread=computePlayerSpread(w, {
         horizontalSpeedRatio: mr,
@@ -1638,23 +1704,49 @@ export default function Game() {
         onGround: player.onGround,
         crouched: player.crouch,
         scoped: player.scoped,
+        timeSinceStationary: player.timeSinceStationary,
+        timeSinceJump: player.timeSinceJump,
+        speed: spd,
+        maxSpeed: w.moveSpeed || 5.2,
       });
       const dir=getCameraDir();
       dir.x+=(Math.random()-.5)*spread;dir.y+=(Math.random()-.5)*spread;dir.z+=(Math.random()-.5)*spread;dir.normalize();
       muzzleFlash();playGunshot(player.weapon);
       emitSoundEvent(player.team, camera.position, 'gunshot', w.scoped ? 1.15 : 1);
+      spawnMuzzleFlashLight(camera.position, dir);
+      
       const hit=shootRay(camera.position,dir,w.range,'player');
       if(hit){
         spawnTracer(camera.position,hit.point,w.scoped?0xffe8aa:0xfff0a0);
-        if(hit.bot){const isHS=hit.part==='head';damageBot(hit.bot,weaponDamage(w,hit.part,hit.dist,player.scoped),w,'player',hit.part);spawnBlood(hit.point);showHitmark(isHS);playHitSound(isHS);}
+        if(hit.bot){
+          const dmgRes = computeDamage({
+            baseDamage: w.scoped && !player.scoped ? w.dmg * 0.92 : w.dmg,
+            bodyPart: hit.part as BodyPart,
+            armorPenetration: w.armorPen ?? 0.7,
+            targetArmor: hit.bot.armor,
+            targetHasHelmet: hit.bot.helmet,
+            distance: hit.dist,
+            maxRange: w.range,
+          });
+          applyDamageToBot(hit.bot, dmgRes.damage, dmgRes.remainingArmor, w, 'player', hit.part, hit.point);
+          showHitmark(dmgRes.isHeadshot);
+          playHitSound(dmgRes.isHeadshot);
+        }
         else if(hit.remoteId) {
-          const dmg = applyArmor(hit.remote, weaponDamage(w,hit.part,hit.dist,player.scoped), w, hit.part);
-          const isHS = hit.part==='head';
-          showHitmark(isHS); playHitSound(isHS); spawnBlood(hit.point);
+          const dmgRes = computeDamage({
+            baseDamage: w.scoped && !player.scoped ? w.dmg * 0.92 : w.dmg,
+            bodyPart: hit.part as BodyPart,
+            armorPenetration: w.armorPen ?? 0.7,
+            targetArmor: hit.remote.armor || 0,
+            targetHasHelmet: hit.remote.helmet || false,
+            distance: hit.dist,
+            maxRange: w.range,
+          });
+          showHitmark(dmgRes.isHeadshot); playHitSound(dmgRes.isHeadshot); spawnBlood(hit.point);
           roomManager.sendUpdate({
             type: 'DAMAGE',
             targetId: hit.remoteId,
-            damage: dmg,
+            damage: dmgRes.damage,
             killerId: roomManager.getMyId(),
             weapon: player.weapon,
             part: hit.part
@@ -1726,14 +1818,56 @@ export default function Game() {
       if(ce&&player.onGround&&player.jumpBuffer>0){
         player.vel.y=6.85;player.onGround=false;player.jumpBuffer=0;player.scoped=false;
       }
+      // First-shot accuracy tracking
+      if (spd < 0.1) {
+        player.timeSinceStationary = (player.timeSinceStationary || 0) + dt;
+      } else {
+        player.timeSinceStationary = 0;
+      }
+      if (player.onGround) {
+        player.timeSinceJump = (player.timeSinceJump || 0) + dt;
+      } else {
+        player.timeSinceJump = 0;
+      }
+
       player.vel.y-=22*dt;
       const wasG=player.onGround;
       const fallSpeed=Math.abs(player.vel.y);
-      player.onGround=moveWithCollision(player.pos,player.vel,dt,0.3,player.crouch?CROUCH_HEIGHT:PLAYER_HEIGHT);
+
+      // Smooth crouch lerping
+      const oldHeight = player.height !== undefined ? player.height : (player.crouch ? CROUCH_HEIGHT : PLAYER_HEIGHT);
+      player.height = lerpCrouchHeight(oldHeight, player.crouch ? CROUCH_HEIGHT : PLAYER_HEIGHT, dt, 12);
+      const dHeight = player.height - oldHeight;
+      player.pos.y += dHeight;
+
+      // Capsule movement physics
+      const moveRes = moveWithCapsuleCollision(
+        { x: player.pos.x, y: player.pos.y, z: player.pos.z },
+        { x: player.vel.x, y: player.vel.y, z: player.vel.z },
+        dt,
+        { radius: 0.3, height: player.height },
+        colliders
+      );
+
+      player.pos.set(moveRes.position.x, moveRes.position.y, moveRes.position.z);
+      player.vel.set(moveRes.velocity.x, moveRes.velocity.y, moveRes.velocity.z);
+      player.onGround = moveRes.onGround;
+
+      // Apply floor clamp
+      if (player.pos.y < CT_SPAWN_POS.y + player.height) {
+        player.pos.y = CT_SPAWN_POS.y + player.height;
+        player.vel.y = 0;
+        player.onGround = true;
+      }
+
       if(!wasG&&player.onGround){player.landBob=1;playLandSound(clamp(fallSpeed/6.5,0.7,1.3));}
       player.landBob=Math.max(0,player.landBob-dt*5);
-      camera.position.copy(player.pos);camera.position.y=player.pos.y+(player.crouch?-0.28:0);
-      camera.rotation.set(player.pitch,player.yaw,0,'YXZ');
+
+      // Visual camera punch decay
+      player.cameraPunch = Math.max(0, (player.cameraPunch || 0) - dt * (1000 / CAMERA_PUNCH_RECOVERY_MS) * CAMERA_PUNCH_PITCH);
+
+      camera.position.copy(player.pos);
+      camera.rotation.set(player.pitch - (player.cameraPunch || 0), player.yaw, 0, 'YXZ');
       if(player.shootCD>0)player.shootCD-=dt;
       if(player.reloading){player.reloadT-=dt;if(player.reloadT<=0)finishReload();}
       player.shooting = mouseDown;
@@ -1922,59 +2056,144 @@ export default function Game() {
 
     function botMoveTo(bot:any,target:THREE.Vector3,dt:number,speed=3.2){
       const flatDist=Math.hypot(bot.obj.position.x-target.x,bot.obj.position.z-target.z);
-      if(flatDist<0.36){bot.navPath=[];bot.navIndex=0;return true;}
-      if(flatDist<5.5&&lineClear2D(bot.obj.position,target,0.42)){
-        bot.navPath=[];bot.navIndex=0;return botMoveDirect(bot,target,dt,speed);
+      if(flatDist<0.36){
+        bot.navState.currentPath = [];
+        bot.navState.pathIndex = 0;
+        return true;
       }
+      if(flatDist<5.5&&lineClear2D(bot.obj.position,target,0.42)){
+        bot.navState.currentPath = [];
+        bot.navState.pathIndex = 0;
+        return botMoveDirect(bot,target,dt,speed);
+      }
+      
       const now=performance.now()/1000;
       const goalChanged=!bot.navGoal||bot.navGoal.distanceToSquared(target)>5.2;
-      const movedSincePlan=bot.navLastPos.distanceToSquared(bot.obj.position);
-      bot.navStuckT = movedSincePlan < 0.0015 ? bot.navStuckT + dt : 0;
-      bot.navLastPos.copy(bot.obj.position);
-      if(goalChanged||!bot.navPath.length||bot.navIndex>=bot.navPath.length||now>bot.navRepathAt||bot.navStuckT>0.7){
+      
+      // stuck check and path updates
+      const navUpdate = updateNavState(bot.navState, bot.obj.position, dt);
+      
+      if(goalChanged||!bot.navState.currentPath.length||now>bot.navRepathAt||navUpdate.repath){
         bot.navGoal=target.clone();
-        bot.navPath=buildNavPath(bot.obj.position,target).slice(1);
-        bot.navIndex=0;
+        if (navGraph) {
+          const targetSite = state.attackSite === 'A' || state.attackSite === 'B' ? state.attackSite : undefined;
+          const pathRes = findPath(navGraph, bot.obj.position, target, targetSite);
+          
+          if (pathRes.nodeIds.length > 0) {
+            const nextNodeId = pathRes.nodeIds[0];
+            const sharedChokes = (window as any).__SHARED_CHOKEPOINTS__ || new Map();
+            if (navGraph.chokepoints.has(nextNodeId)) {
+              if (!isChokepointAvailable(navGraph, nextNodeId, bot.id, sharedChokes)) {
+                // clustering check: slow down
+                speed *= 0.25;
+              } else {
+                sharedChokes.set(nextNodeId, bot.id);
+                (window as any).__SHARED_CHOKEPOINTS__ = sharedChokes;
+              }
+            }
+          }
+          
+          bot.navState.currentPath = navSmoothPath(pathRes.path);
+          bot.navState.currentNodeIds = pathRes.nodeIds;
+          bot.navState.pathIndex = 0;
+        } else {
+          bot.navState.currentPath = [target.clone()];
+          bot.navState.pathIndex = 0;
+        }
         bot.navRepathAt=now+rand(0.45,0.82);
-        bot.navStuckT=0;
       }
-      const wp=bot.navPath[bot.navIndex]||target;
-      if(bot.obj.position.distanceTo(wp)<0.8&&bot.navIndex<bot.navPath.length-1)bot.navIndex++;
-      if(bot.navIndex>=bot.navPath.length&&bot.obj.position.distanceTo(wp)<0.85){bot.navPath=[];return true;}
+      
+      const nextWp = bot.navState.currentPath[bot.navState.pathIndex] || target;
+      const wp = new THREE.Vector3(nextWp.x, nextWp.y, nextWp.z);
+      
+      if(bot.navState.pathIndex >= bot.navState.currentPath.length && bot.obj.position.distanceTo(wp)<0.85){
+        bot.navState.currentPath = [];
+        return true;
+      }
       return botMoveDirect(bot,wp,dt,speed);
     }
 
-    function botShootAt(bot:any,aimAt:THREE.Vector3,dt:number){
+    function botShootAtTarget(bot:any, aimAt:THREE.Vector3, dt:number){
       const w=WEAPONS[bot.weapon];
-      if(bot.reloadT>0){bot.reloadT-=dt;if(bot.reloadT<=0)bot.ammoMag=w.magSize;return;}
-      if(bot.ammoMag<=0){bot.reloadT=w.reload;return;}
+      if(bot.reloadT > 0) return;
+      if(bot.ammoMag <= 0) {
+        bot.reloadT = w.reload;
+        return;
+      }
+      
       // Burst discipline for auto weapons
       if(w.auto&&bot.burstRest>0){bot.burstRest-=dt;return;}
-      bot.fireCD-=dt;bot.reactionT=Math.max(0,bot.reactionT-dt);
+      bot.fireCD-=dt;
+      bot.reactionT=Math.max(0,bot.reactionT-dt);
       if(bot.fireCD>0||bot.reactionT>0)return;
-      const eye=bot.obj.position.clone();eye.y+=1.45;
-      const desired=aimAt.clone().sub(eye).normalize();
-      const aimSpeed=clamp(9*dt*(0.6+bot.accuracy*0.5),0,1);
-      bot.aimDir.lerp(desired,aimSpeed);
+      
+      // Only shoot if aim is on target!
+      let threshold = 0.09;
+      if (bot.difficulty === 'easy') threshold = 0.22;
+      else if (bot.difficulty === 'medium') threshold = 0.15;
+      else if (bot.difficulty === 'hard') threshold = 0.08;
+      else if (bot.difficulty === 'pro') threshold = 0.04;
+      
+      if (!isAimReady(bot.aimState, threshold)) return;
+      
+      const eye=bot.obj.position.clone(); eye.y+=1.45;
       const dist=eye.distanceTo(aimAt);
-      let spread=w.spread+(1-bot.accuracy)*0.022+clamp(dist/85,0,1)*0.018;
-      const scoped=Boolean(w.scoped&&dist>18&&bot.aiState==='engage');
-      if(scoped)spread*=0.22;else if(w.scoped)spread*=5;
-      bot.fireCD=w.cd*rand(0.88,1.18);bot.ammoMag--;bot.shotCount++;
+      
+      // Calculate spread using difficulty params
+      const params = AIM_DIFFICULTY_PARAMS[bot.difficulty as AimDifficulty] || AIM_DIFFICULTY_PARAMS.medium;
+      let spread = w.spread + (1 - params.burstAccuracy) * 0.015 + clamp(dist/85,0,1)*0.018;
+      const scoped=Boolean(w.scoped&&dist>18&&bot.combatSnapshot.state==='engaging');
+      if(scoped) spread*=0.22; else if(w.scoped) spread*=5;
+      
+      bot.fireCD=w.cd*rand(0.88,1.18);
+      bot.ammoMag--;
+      bot.shotCount++;
+      
       playGunshot(bot.weapon);
       emitSoundEvent(bot.team, eye, 'gunshot', w.scoped ? 1.15 : 1);
-      // Burst control: SMGs fire 3-5 round bursts
-      if(w.auto&&bot.shotCount%(3+Math.floor(bot.accuracy*3))===0) bot.burstRest=rand(0.08,0.22);
+      
+      // Spawn point light muzzle flash
       const dir=bot.aimDir.clone();
       dir.x+=(Math.random()-.5)*spread;dir.y+=(Math.random()-.5)*spread;dir.z+=(Math.random()-.5)*spread;dir.normalize();
+      spawnMuzzleFlashLight(eye, dir);
+      
+      // Burst control: SMGs/rifles fire 3-5 round bursts
+      if(w.auto&&bot.shotCount%(3+Math.floor(params.burstAccuracy*3))===0) {
+        bot.burstRest=rand(0.08,0.22);
+      }
+      
       const hit=shootRay(eye,dir,w.range,bot);
       spawnTracer(eye,hit?hit.point:eye.clone().add(dir.clone().multiplyScalar(w.range)),bot.team==='CT'?0x9ad7ff:0xffd59c);
+      
       if(hit){
-        if(hit.isPlayer)damagePlayer(weaponDamage(w,hit.part,hit.dist,scoped),bot,w,hit.part);
-        else if(hit.bot&&hit.bot.team!==bot.team)damageBot(hit.bot,weaponDamage(w,hit.part,hit.dist,scoped),w,bot,hit.part);
-        else if(hit.isWall)spawnImpact(hit.point,0x33271d);
+        if(hit.isPlayer) {
+          const dmgRes = computeDamage({
+            baseDamage: w.scoped && !scoped ? w.dmg * 0.92 : w.dmg,
+            bodyPart: hit.part as BodyPart,
+            armorPenetration: w.armorPen ?? 0.7,
+            targetArmor: player.armor,
+            targetHasHelmet: player.helmet,
+            distance: hit.dist,
+            maxRange: w.range,
+          });
+          damagePlayerWithDetails(dmgRes.damage, dmgRes.remainingArmor, bot, w, hit.part);
+        }
+        else if(hit.bot&&hit.bot.team!==bot.team) {
+          const dmgRes = computeDamage({
+            baseDamage: w.scoped && !scoped ? w.dmg * 0.92 : w.dmg,
+            bodyPart: hit.part as BodyPart,
+            armorPenetration: w.armorPen ?? 0.7,
+            targetArmor: hit.bot.armor,
+            targetHasHelmet: hit.bot.helmet,
+            distance: hit.dist,
+            maxRange: w.range,
+          });
+          applyDamageToBot(hit.bot, dmgRes.damage, dmgRes.remainingArmor, w, bot, hit.part, hit.point);
+        }
+        else if(hit.isWall) spawnImpact(hit.point,0x33271d);
       }
-      bot.reactionT=rand(0.03,0.14)+(1-bot.accuracy)*0.1;
+      
+      bot.reactionT=rand(0.03,0.14)+(1-params.burstAccuracy)*0.1;
     }
 
     function followRoute(bot:any,dt:number,speed=3.2){
@@ -2036,7 +2255,10 @@ export default function Game() {
       bot.damagedT+=dt;
 
       // Freeze phase: just stand there
-      if(state.phase==='freeze'){setAiState(bot,'freeze');return;}
+      if(state.phase==='freeze'){
+        bot.combatSnapshot.state = 'patrolling';
+        return;
+      }
 
       // Look for enemies
       const enemy=findEnemy(bot);
@@ -2050,6 +2272,7 @@ export default function Game() {
             ally.obj.position.distanceTo(bot.obj.position) < 12,
         ).length +
         (player.alive && player.team === bot.team && player.pos.distanceTo(bot.obj.position) < 12 ? 1 : 0);
+        
       const blackboard = updateBotBlackboard({
         botTeam: bot.team as Team,
         botPosition: bot.obj.position,
@@ -2093,179 +2316,290 @@ export default function Game() {
       if(!enemy && bot.heardSoundPos && bot.heardSoundAge < 4.5 && bot.lastDecision === 'investigate-sound'){
         bot.lastSeenPos = bot.heardSoundPos.clone();
         bot.lastSeenT = Math.min(bot.lastSeenT, bot.heardSoundAge);
-        if(bot.aiState === 'hold' || bot.aiState === 'route') setAiState(bot,'search');
       }
-      if(!enemy && bot.heardSoundPos && bot.lastDecision === 'take-cover' && (bot.aiState === 'hold' || bot.aiState === 'route')){
-        setAiState(bot,'retreat');
-        bot.retreatPos = findCoverFrom(bot, bot.heardSoundPos) || bot.anchor.clone();
+      
+      // Update bot ammo and reloading logic using BotEconomy
+      const inv = {
+        weapon: bot.weapon,
+        credits: bot.money || 0,
+        ammoMag: bot.ammoMag,
+        ammoReserve: bot.ammoReserve !== undefined ? bot.ammoReserve : 90,
+        armor: bot.armor,
+        helmet: bot.helmet,
+        isReloading: bot.reloadT > 0,
+        reloadTimeRemaining: bot.reloadT,
+      };
+      
+      const nearestNode = navGraph ? findNearestNode(navGraph, bot.obj.position) : null;
+      const coverScore = nearestNode ? nearestNode.coverScore : 0.5;
+      
+      // Auto-reload check
+      if (shouldBotReload(inv, coverScore > 0.5, !!enemy)) {
+        bot.reloadT = w.reload;
+      }
+      
+      const updatedInv = updateBotAmmo(inv, dt, w.reload, w.magSize);
+      bot.ammoMag = updatedInv.ammoMag;
+      bot.ammoReserve = updatedInv.ammoReserve;
+      bot.reloadT = updatedInv.reloadTimeRemaining;
+      
+      // Update combat context
+      const context: CombatContext = {
+        hp: bot.hp,
+        maxHp: 100,
+        ammoMag: bot.ammoMag,
+        magSize: w.magSize,
+        hasLineOfSight: !!enemy,
+        distanceToEnemy: enemy ? enemy.dist : 9999,
+        lastKnownEnemyAge: bot.lastSeenT,
+        coverScore: coverScore,
+        nearestCoverScore: 0.7,
+        hasBomb: bot.hasBomb,
+        bombPlanted: !!state.bomb,
+        isOnBombSite: bot.obj.position.distanceTo(state.attackSite === 'A' ? A_SITE : B_SITE) < 6.0,
+        team: bot.team as 'CT' | 'T',
+        difficulty: bot.difficulty,
+        suppressionTimer: bot.combatSnapshot.suppressionTimer,
+      };
+
+      // Advance combat state
+      bot.combatSnapshot = advanceCombatState(bot.combatSnapshot, context, dt);
+      
+      const enemyId = enemy ? (enemy.ent.isPlayer ? 'player' : enemy.ent.id) : null;
+      const threatId = enemyId || (bot.lastSeenPos && bot.lastSeenT < 5 ? 'lastSeen' : (bot.heardSoundPos && bot.heardSoundAge < 4.5 ? 'heardSound' : null));
+
+      // Determine target angle for aim simulator
+      let desiredTargetAngle = { x: 0, y: bot.obj.rotation.y };
+      if (enemy) {
+        const eye = bot.obj.position.clone(); eye.y += 1.45;
+        const toEnemy = enemy.pos.clone().sub(eye);
+        const dist2d = Math.sqrt(toEnemy.x * toEnemy.x + toEnemy.z * toEnemy.z);
+        const yaw = Math.atan2(-toEnemy.x, -toEnemy.z);
+        const pitch = Math.atan2(toEnemy.y, dist2d);
+        desiredTargetAngle = { x: pitch, y: yaw };
+      } else if (bot.lastSeenPos && bot.lastSeenT < 5) {
+        const eye = bot.obj.position.clone(); eye.y += 1.45;
+        const toPos = bot.lastSeenPos.clone().sub(eye);
+        const dist2d = Math.sqrt(toPos.x * toPos.x + toPos.z * toPos.z);
+        const yaw = Math.atan2(-toPos.x, -toPos.z);
+        const pitch = Math.atan2(toPos.y, dist2d);
+        desiredTargetAngle = { x: pitch, y: yaw };
+      } else if (bot.heardSoundPos && bot.heardSoundAge < 4.5) {
+        const eye = bot.obj.position.clone(); eye.y += 1.45;
+        const toPos = bot.heardSoundPos.clone().sub(eye);
+        const dist2d = Math.sqrt(toPos.x * toPos.x + toPos.z * toPos.z);
+        const yaw = Math.atan2(-toPos.x, -toPos.z);
+        const pitch = Math.atan2(toPos.y, dist2d);
+        desiredTargetAngle = { x: pitch, y: yaw };
       }
 
-      // ── TRANSITION TO ENGAGE ──────────────────────────────────────────────
-      if(enemy&&enemy.dist<(w.scoped?72:50)){
-        if(bot.aiState!=='engage')setAiState(bot,'engage');
-        bot.target=enemy;
-      } else if(bot.aiState==='engage'){
-        // Lost sight → search
-        setAiState(bot,'search');
-        bot.target=null;
-      }
-
-      // ── ENGAGE ───────────────────────────────────────────────────────────
-      if(bot.aiState==='engage'&&bot.target){
-        const aimAt=bot.target.pos.clone();
-        aimAt.y+=bot.target.ent.isPlayer?1.32:1.42;
-        const toEnemy=bot.target.pos.clone().sub(bot.obj.position);toEnemy.y=0;
-        const dist=toEnemy.length();
-        const isAWP=w.scoped;
-        // AWP: stay distant, crouch
-        if(isAWP){
-          if(dist<12){ const back=bot.obj.position.clone().sub(toEnemy.normalize().multiplyScalar(2));botMoveTo(bot,back,dt,2.8); }
-          else { const side=vec(-toEnemy.z,0,toEnemy.x).normalize().multiplyScalar(Math.sin(performance.now()*0.0015+bot.strafeSeed)*1.2);botMoveTo(bot,bot.obj.position.clone().add(side),dt,1.8); }
-        } else if(dist>20&&bot.aggression>0.6){
-          // Aggressive push
-          const side=vec(-toEnemy.z,0,toEnemy.x).normalize().multiplyScalar(Math.sin(performance.now()*0.0024+bot.strafeSeed)*1.5);
-          botMoveTo(bot,bot.target.pos.clone().add(side),dt,w.moveSpeed*0.62);
-        } else if(dist>8){
-          // Strafe and fight
-          const sideDir=vec(-toEnemy.z,0,toEnemy.x).normalize();
-          const sideAmt=Math.sin(performance.now()*0.005+bot.strafeSeed)*(1.6+bot.aggression);
-          const mv=sideDir.multiplyScalar(sideAmt);
-          botMoveTo(bot,bot.obj.position.clone().add(mv),dt,w.moveSpeed*0.5);
+      // Check if we are aiming at a different target or a new threat
+      if (threatId) {
+        if (bot.lastThreatId !== threatId) {
+          bot.aimState = setTarget(bot.aimState, desiredTargetAngle, bot.difficulty);
+          bot.lastThreatId = threatId;
         } else {
-          // Close: back up a bit
-          const back=bot.obj.position.clone().sub(toEnemy.normalize().multiplyScalar(1.2));
-          botMoveTo(bot,back,dt,w.moveSpeed*0.45);
+          // Just update the target angle dynamically without resetting the reaction timer
+          bot.aimState.targetAngle = desiredTargetAngle;
         }
-        bot.obj.lookAt(aimAt);
-        botShootAt(bot,aimAt,dt);
-        // If took enough damage, retreat
-        if(bot.danger>0.72&&(bot.hp<50||bot.damagedT<1.1)&&Math.random()<(0.18 + (bot.peekDiscipline ?? 0.5) * 0.24)*dt*18){
-          setAiState(bot,'retreat');
-          bot.retreatPos=findCoverFrom(bot,bot.target.pos)||bot.anchor.clone();
+      } else {
+        bot.lastThreatId = null;
+        bot.aimState.targetAngle = desiredTargetAngle;
+      }
+      
+      // Update aim state
+      bot.aimState = updateAim(bot.aimState, dt, bot.difficulty);
+      const cp = bot.aimState.currentAngle.x;
+      const cy = bot.aimState.currentAngle.y;
+      
+      // Update bot rotation and spine bone
+      if (shouldMove(bot.combatSnapshot) && bot.navState.currentPath.length > 0) {
+        if (bot.spine) {
+          let relYaw = cy - bot.obj.rotation.y;
+          relYaw = Math.atan2(Math.sin(relYaw), Math.cos(relYaw));
+          const maxTwist = 50 * Math.PI / 180;
+          relYaw = Math.max(-maxTwist, Math.min(maxTwist, relYaw));
+          bot.spine.rotation.y = relYaw;
         }
-        return;
+        if (bot.head) {
+          bot.head.rotation.set(cp, 0, 0);
+        }
+      } else {
+        bot.obj.rotation.y = cy;
+        if (bot.spine) bot.spine.rotation.y = 0;
+        if (bot.head) bot.head.rotation.set(cp, 0, 0);
       }
 
-      // ── SEARCH ───────────────────────────────────────────────────────────
-      if(bot.aiState==='search'){
-        const searchPos = bot.lastSeenPos || bot.heardSoundPos;
-        if(searchPos&&(bot.lastSeenT<8||bot.heardSoundAge<4.5)){
-          const arrived = botMoveTo(bot,searchPos,dt,w.moveSpeed*0.55);
-          // After arriving or 4s searching, go back to normal
-          if(arrived || bot.stateT>4.5)setAiState(bot,bot.team==='T'?'route':'hold');
-        } else {
-          setAiState(bot,bot.team==='T'?'route':'hold');
-        }
-        return;
-      }
+      // Update bot aim direction vector
+      bot.aimDir.set(0, 0, -1).applyEuler(new THREE.Euler(cp, cy, 0, 'YXZ')).normalize();
 
-      // ── RETREAT ──────────────────────────────────────────────────────────
-      if(bot.aiState==='retreat'){
-        const target=bot.retreatPos||bot.anchor;
-        const arrived=botMoveTo(bot,target,dt,w.moveSpeed*0.7);
-        if(arrived||bot.stateT>3.5)setAiState(bot,bot.team==='T'?'route':'hold');
-        return;
-      }
-
-      // ── T-SIDE LOGIC ─────────────────────────────────────────────────────
-      if(bot.team==='T'){
-        // Bomb on ground? nearest T picks it up
-        if(droppedBomb&&!bot.hasBomb&&!bots.some(b=>b.alive&&b.hasBomb)){
-          if(bot.obj.position.distanceTo(droppedBomb.pos)<1.4){
-            bot.hasBomb=true;droppedBomb=null;
-            if(droppedBombMesh){
-              scene.remove(droppedBombMesh);
-              disposeObject3DResources(droppedBombMesh);
-              droppedBombMesh=null;
-            }
-          } else { botMoveTo(bot,droppedBomb.pos,dt,w.moveSpeed*0.65);return; }
-        }
-        // If bomb is planted, hold post-plant positions
-        if(state.bomb){
-          const holds=sitePostPlantPositions(state.attackSite);
-          const hold=holds[(bot.role.charCodeAt(0)+bot.name.length)%holds.length];
-          botMoveTo(bot,hold,dt,w.moveSpeed*0.6);
-          const lookAt=state.bomb.pos.clone().add(vec(0,0.4,0));
-          // Rotate to face any threat direction
-          if(bot.lastSeenPos&&bot.lastSeenT<3){
-            bot.obj.lookAt(bot.lastSeenPos.clone().add(vec(0,1.4,0)));
-            botShootAt(bot,bot.lastSeenPos.clone().add(vec(0,1.4,0)),dt);
-          } else bot.obj.lookAt(lookAt);
-          return;
-        }
-        // Bomb carrier: rush to site
-        if(bot.hasBomb){
-          if(bot.rushDelay>0){bot.rushDelay-=dt;return;}
-          const arrived=followRoute(bot,dt,w.moveSpeed*0.68);
-          const site=state.attackSite==='A'?A_SITE:B_SITE;
-          if(arrived||bot.obj.position.distanceTo(site)<3.8){
-            bot.plantT+=dt;
-            if(bot.plantT>3.4) plantBomb(bot.obj.position.clone(),bot);
-          } else bot.plantT=0;
-          return;
-        }
-        // Non-carrier: rush, staggered
-        if(bot.route.length){
-          if(bot.rushDelay>0){bot.rushDelay-=dt;return;}
-          const arrived=followRoute(bot,dt,w.moveSpeed*0.65);
-          // At site: peek and watch
-          if(arrived){
-            const holds=sitePostPlantPositions(state.attackSite);
-            const hold=holds[(bot.role.charCodeAt(0))%holds.length];
-            botMoveTo(bot,hold,dt,w.moveSpeed*0.5);
-          }
-          return;
-        }
-      }
-
-      // ── CT-SIDE LOGIC ─────────────────────────────────────────────────────
-      if(bot.team==='CT'){
-        // Bomb planted → rotate to retake
-        if(state.bomb){
-          const retakes=siteRetakePositions(state.attackSite);
-          const retakeTarget=retakes[(bot.name.charCodeAt(2)||0)%retakes.length];
-          const onSite=bot.obj.position.distanceTo(state.bomb.pos)<2.0;
-          if(!onSite){
-            botMoveTo(bot,retakeTarget,dt,w.moveSpeed*0.65);
+      // Execute action depending on combat state
+      const stateName = bot.combatSnapshot.state;
+      
+      if (stateName === 'engaging' && enemy) {
+        const aimAt = enemy.pos.clone();
+        aimAt.y += enemy.ent.isPlayer ? 1.32 : 1.42;
+        
+        // Strafe and fight logic
+        const toEnemy = enemy.pos.clone().sub(bot.obj.position); toEnemy.y = 0;
+        const dist = toEnemy.length();
+        
+        if (w.scoped) {
+          if (dist < 12) {
+            const back = bot.obj.position.clone().sub(toEnemy.normalize().multiplyScalar(2));
+            botMoveTo(bot, back, dt, 2.8);
           } else {
-            // Defuse
-            bot.defuseT+=dt;
-            if(bot.defuseT>5){
-              if(state.bomb?.mesh){
+            const side = vec(-toEnemy.z, 0, toEnemy.x).normalize().multiplyScalar(Math.sin(performance.now() * 0.0015 + bot.strafeSeed) * 1.2);
+            botMoveTo(bot, bot.obj.position.clone().add(side), dt, 1.8);
+          }
+        } else if (dist > 20 && bot.aggression > 0.6) {
+          const side = vec(-toEnemy.z, 0, toEnemy.x).normalize().multiplyScalar(Math.sin(performance.now() * 0.0024 + bot.strafeSeed) * 1.5);
+          botMoveTo(bot, enemy.pos.clone().add(side), dt, w.moveSpeed * 0.62);
+        } else if (dist > 8) {
+          const sideDir = vec(-toEnemy.z, 0, toEnemy.x).normalize();
+          const sideAmt = Math.sin(performance.now() * 0.005 + bot.strafeSeed) * (1.6 + bot.aggression);
+          botMoveTo(bot, bot.obj.position.clone().add(sideDir.multiplyScalar(sideAmt)), dt, w.moveSpeed * 0.5);
+        } else {
+          const back = bot.obj.position.clone().sub(toEnemy.normalize().multiplyScalar(1.2));
+          botMoveTo(bot, back, dt, w.moveSpeed * 0.45);
+        }
+        
+        botShootAtTarget(bot, aimAt, dt);
+        
+        if (bot.hp < 40 && coverScore > 0.6) {
+          bot.retreatPos = findCoverFrom(bot, enemy.pos) || bot.anchor.clone();
+        }
+        return;
+      }
+      
+      if (stateName === 'suppressing') {
+        const suppressPos = bot.lastSeenPos ? bot.lastSeenPos.clone() : (bot.heardSoundPos ? bot.heardSoundPos.clone() : null);
+        if (suppressPos) {
+          suppressPos.y += 1.42;
+          botShootAtTarget(bot, suppressPos, dt);
+        }
+        return;
+      }
+      
+      if (stateName === 'retreating') {
+        const targetPos = bot.retreatPos || findCoverFrom(bot, bot.lastSeenPos || bot.obj.position) || bot.anchor;
+        botMoveTo(bot, targetPos, dt, w.moveSpeed * 0.7);
+        return;
+      }
+      
+      if (stateName === 'reloading') {
+        const coverPos = findCoverFrom(bot, bot.lastSeenPos || bot.obj.position) || bot.anchor;
+        botMoveTo(bot, coverPos, dt, w.moveSpeed * 0.5);
+        return;
+      }
+      
+      if (stateName === 'investigating') {
+        const searchPos = bot.lastSeenPos || bot.heardSoundPos;
+        if (searchPos) {
+          botMoveTo(bot, searchPos, dt, w.moveSpeed * 0.55);
+        }
+        return;
+      }
+      
+      if (stateName === 'planting') {
+        const site = state.attackSite === 'A' ? A_SITE : B_SITE;
+        const dist = bot.obj.position.distanceTo(site);
+        if (dist < 3.8) {
+          bot.plantT += dt;
+          if (bot.plantT > 3.4) {
+            plantBomb(bot.obj.position.clone(), bot);
+            bot.plantT = 0;
+          }
+        } else {
+          botMoveTo(bot, site, dt, w.moveSpeed * 0.68);
+          bot.plantT = 0;
+        }
+        return;
+      }
+      
+      if (stateName === 'defusing') {
+        if (state.bomb) {
+          const dist = bot.obj.position.distanceTo(state.bomb.pos);
+          if (dist < 2.0) {
+            bot.defuseT += dt;
+            if (bot.defuseT > 5) {
+              if (state.bomb.mesh) {
                 scene.remove(state.bomb.mesh);
                 disposeObject3DResources(state.bomb.mesh);
               }
-              state.bomb=null;endRound('CT','Bomb defused');
+              state.bomb = null;
+              endRound('CT', 'Bomb defused');
+              bot.defuseT = 0;
             }
+          } else {
+            botMoveTo(bot, state.bomb.pos, dt, w.moveSpeed * 0.65);
+            bot.defuseT = 0;
           }
-          // Aim at bomb / retake direction
-          if(state.bomb) bot.obj.lookAt(state.bomb.pos.clone().add(vec(0,1.2,0)));
-          else bot.obj.lookAt(retakeTarget.clone().add(vec(0,1.3,0)));
+        }
+        return;
+      }
+      
+      // Default / patrolling behaviors (CT and T specific route planning)
+      if (bot.team === 'T') {
+        if (droppedBomb && !bot.hasBomb && !bots.some(b => b.alive && b.hasBomb)) {
+          if (bot.obj.position.distanceTo(droppedBomb.pos) < 1.4) {
+            bot.hasBomb = true;
+            droppedBomb = null;
+            if (droppedBombMesh) {
+              scene.remove(droppedBombMesh);
+              disposeObject3DResources(droppedBombMesh);
+              droppedBombMesh = null;
+            }
+          } else {
+            botMoveTo(bot, droppedBomb.pos, dt, w.moveSpeed * 0.65);
+            return;
+          }
+        }
+        
+        if (state.bomb) {
+          const holds = sitePostPlantPositions(state.attackSite);
+          const hold = holds[(bot.role.charCodeAt(0) + bot.name.length) % holds.length];
+          botMoveTo(bot, hold, dt, w.moveSpeed * 0.6);
           return;
         }
-        // Hold / peek mode: periodically peek the corner
-        const peekAnglePts=CT_PEEK_ANGLES[bot.role]||[];
-        const shouldPeek=peekAnglePts.length>0&&bot.stateT>rand(3,6)*(1+(bot.peekDiscipline ?? 0.5)*0.35)&&bot.aiState==='hold';
-        if(shouldPeek&&bot.lastSeenT>8){
-          setAiState(bot,'peek');
-          bot.coverPos=peekAnglePts[Math.floor(Math.random()*peekAnglePts.length)];
-        }
-        if(bot.aiState==='peek'){
-          if(bot.coverPos){
-            botMoveTo(bot,bot.coverPos,dt,w.moveSpeed*0.55);
-            // Stay in peek for 2s then retreat to anchor
-            if(bot.stateT>2.0) setAiState(bot,'hold');
-          } else setAiState(bot,'hold');
-          // Look toward T-side danger angle
-          const danger=state.attackSite==='A'?vec(-34,0,-18):vec(34,0,-24);
-          bot.obj.lookAt(danger.clone().add(vec(0,1.4,0)));
+        
+        if (bot.hasBomb) {
+          if (bot.rushDelay > 0) {
+            bot.rushDelay -= dt;
+            return;
+          }
+          const site = state.attackSite === 'A' ? A_SITE : B_SITE;
+          botMoveTo(bot, site, dt, w.moveSpeed * 0.68);
           return;
         }
-        // Default: idle drift around anchor, watching angle
-        const idleOff=vec(Math.sin(performance.now()*0.0014+bot.strafeSeed)*0.8,0,Math.cos(performance.now()*0.0009+bot.strafeSeed)*0.5);
-        botMoveTo(bot,bot.anchor.clone().add(idleOff),dt,w.moveSpeed*0.45);
-        bot.obj.rotation.y=lerp(bot.obj.rotation.y,bot.holdYaw,0.06);
-        if(bot.aiState!=='hold')setAiState(bot,'hold');
+        
+        if (bot.route.length) {
+          if (bot.rushDelay > 0) {
+            bot.rushDelay -= dt;
+            return;
+          }
+          followRoute(bot, dt, w.moveSpeed * 0.65);
+          return;
+        }
+      } else {
+        const peekAnglePts = CT_PEEK_ANGLES[bot.role] || [];
+        const shouldPeek = peekAnglePts.length > 0 && bot.stateT > rand(3, 6) * (1 + (bot.peekDiscipline ?? 0.5) * 0.35) && bot.aiState === 'hold';
+        if (shouldPeek) {
+          bot.aiState = 'peek';
+          bot.coverPos = peekAnglePts[Math.floor(Math.random() * peekAnglePts.length)];
+          bot.stateT = 0;
+        }
+        if (bot.aiState === 'peek' && bot.coverPos) {
+          botMoveTo(bot, bot.coverPos, dt, w.moveSpeed * 0.55);
+          if (bot.stateT > 2.0) {
+            bot.aiState = 'hold';
+            bot.stateT = 0;
+          }
+          return;
+        }
+        
+        const idleOff = vec(Math.sin(performance.now() * 0.0014 + bot.strafeSeed) * 0.8, 0, Math.cos(performance.now() * 0.0009 + bot.strafeSeed) * 0.5);
+        botMoveTo(bot, bot.anchor.clone().add(idleOff), dt, w.moveSpeed * 0.45);
       }
     }
 
@@ -2326,6 +2660,10 @@ export default function Game() {
       state.attackSite=Math.random()<0.5?'A':'B';
       state.specTarget=null;
       soundEvents=[];
+      player.roundKills = 0; player.roundHeadshots = 0;
+      player.inspecting = false; player.inspectT = 0;
+      if (dom.mvpCard) dom.mvpCard.classList.remove('show');
+      if (dom.killstreak) dom.killstreak.classList.remove('show');
       dom.roundEnd.style.display='none';dom.bombIcon.classList.remove('armed');
       if(dom.plant)dom.plant.style.display='none';
       clearDroppedWeapons();clearBombWorld();
@@ -2382,6 +2720,40 @@ export default function Game() {
         const streak = player.team==='CT'?state.ctLossStreak:state.tLossStreak;
         player.money=Math.min(16000,player.money+lossBonusTable[Math.min(streak,4)]);
       }
+
+      // Update persistent stats for bots
+      for (const bot of bots) {
+        const stats = persistentBotStats.get(bot.name) || { kills: bot.kills, deaths: bot.deaths, money: bot.money || 800 };
+        stats.kills = bot.kills;
+        stats.deaths = bot.deaths;
+        
+        // Award money to bot
+        const botWon = winner === bot.team;
+        if (botWon) {
+          stats.money = Math.min(16000, stats.money + 3250);
+        } else {
+          const streak = bot.team === 'CT' ? state.ctLossStreak : state.tLossStreak;
+          stats.money = Math.min(16000, stats.money + lossBonusTable[Math.min(streak, 4)]);
+        }
+        persistentBotStats.set(bot.name, stats);
+      }
+
+      // Compute MVP Card
+      let mvpName = 'Team Synergy';
+      let mvpReason = 'Tactical Execution';
+      if (player.roundKills > 0) {
+        mvpName = playerNameRef.current;
+        mvpReason = `FOR ${player.roundKills} ELIMINATIONS (${player.roundHeadshots} HEADSHOTS)`;
+      } else {
+        const topBot = bots.filter(b => b.team === winner).sort((a,b) => b.kills - a.kills)[0];
+        if (topBot && topBot.kills > 0) {
+          mvpName = topBot.name;
+          mvpReason = `FOR MOST ELIMINATIONS IN ROUND`;
+        }
+      }
+      showMvpCard(winner, mvpName, mvpReason);
+      audioSystem.playAnnouncerVoice(winner === 'CT' ? 'ctWin' : 'tWin');
+
       // Track round history
       state.roundHistory.push({winner});
       dom.roundEnd.style.display='block';
@@ -2634,10 +3006,30 @@ export default function Game() {
       const bx=Math.sin(t*6.2)*0.008*spd;
       const by=Math.abs(Math.sin(t*8.4))*0.007*spd+landBob*0.018;
       const tz=w.scoped&&scoped?-0.44:-0.60-Math.min(0.05,recoilIdx*0.006);
-      viewModel.position.lerp(vec(0.19+bx,-0.25-by-(1-switchBob)*0.08,tz),0.18);
+
+      // Viewmodel sway calculation from mouse movements
+      mouseVelX *= Math.exp(-15 * dt);
+      mouseVelY *= Math.exp(-15 * dt);
+      const swayX = clamp(-mouseVelX * 0.0006, -0.06, 0.06);
+      const swayY = clamp(mouseVelY * 0.0006, -0.06, 0.06);
+
+      // Inspect animation progression
+      if (player.inspecting) {
+        player.inspectT = Math.min(2.5, player.inspectT + dt);
+        if (player.inspectT >= 2.5) { player.inspecting = false; player.inspectT = 0; }
+      } else {
+        player.inspectT = Math.max(0, player.inspectT - dt * 3.5);
+      }
+      const inspectArc = Math.sin((player.inspectT / 2.5) * Math.PI);
+      const inspectRotY = inspectArc * 0.72;
+      const inspectRotZ = inspectArc * 0.35;
+      const inspectPosX = inspectArc * -0.07;
+      const inspectPosY = inspectArc * 0.04;
+
+      viewModel.position.lerp(vec(0.19+bx+swayX+inspectPosX,-0.25-by-(1-switchBob)*0.08+swayY+inspectPosY,tz),0.18);
       viewModel.rotation.x=lerp(viewModel.rotation.x,(w.scoped&&scoped?-0.07:0)-pitchRef*0.028,0.12);
-      viewModel.rotation.y=lerp(viewModel.rotation.y,Math.sin(t*1.2)*0.01*spd-yawRef*0.012,0.08);
-      viewModel.rotation.z=lerp(viewModel.rotation.z,Math.sin(t*3.3)*0.012*spd,0.08);
+      viewModel.rotation.y=lerp(viewModel.rotation.y,Math.sin(t*1.2)*0.01*spd-yawRef*0.012 + inspectRotY,0.1);
+      viewModel.rotation.z=lerp(viewModel.rotation.z,Math.sin(t*3.3)*0.012*spd + inspectRotZ,0.1);
       player.switchBob=clamp(player.switchBob+dt*7,0,1);
     }
 
@@ -2808,7 +3200,7 @@ export default function Game() {
       ctx.strokeStyle='rgba(255,255,255,0.08)';ctx.lineWidth=1;ctx.strokeRect(0.5,0.5,MM_SIZE-1,MM_SIZE-1);
     }
 
-    const onResize=()=>{camera.aspect=dom.game.clientWidth/dom.game.clientHeight;camera.updateProjectionMatrix();renderer.setSize(dom.game.clientWidth,dom.game.clientHeight);};
+    const onResize=()=>{gameRenderer.resize(dom.game.clientWidth,dom.game.clientHeight,adaptiveQuality.pixelRatio);};
     addEventListener('resize',onResize);
 
     function syncAnimation(entity: any, speed: number, dt: number) {
@@ -2894,6 +3286,7 @@ export default function Game() {
 
     let last=performance.now(),animId=0,lastBroadcast=0,lastPlayerBroadcast=0;
     function tick(){
+      (window as any).__SHARED_CHOKEPOINTS__ = new Map();
       try {
         const now=performance.now();const dt=Math.min(0.05,(now-last)/1000);last=now;
         if(adaptiveQuality.sampleFrame(dt)) renderer.setPixelRatio(adaptiveQuality.pixelRatio);
@@ -2967,7 +3360,10 @@ export default function Game() {
         }
         updateRemotePlayers(dt);
         updateViewModel(dt);drawMinimap();
-        renderer.render(scene,camera);animId=requestAnimationFrame(tick);
+        if (adaptiveQuality.sampleFrame(dt)) {
+          gameRenderer.setPixelRatio(adaptiveQuality.pixelRatio);
+        }
+        gameRenderer.render(dt);animId=requestAnimationFrame(tick);
       } catch (err: any) {
         console.error("Game loop crashed:", err);
         const overlay = document.createElement('div');
@@ -2992,11 +3388,17 @@ export default function Game() {
       clearDroppedWeapons();
       clearBombWorld();
       clearBots();
+      bloodGeo.dispose();
+      bloodMat.dispose();
+      impactGeo.dispose();
+      impactMatDefault.dispose();
+      impactMatBot.dispose();
+      tracerPlayerMat.dispose();
+      tracerPlayerScopedMat.dispose();
+      tracerTMat.dispose();
+      tracerCTMat.dispose();
       disposeObject3DResources(scene);
-      renderer.renderLists.dispose();
-      renderer.dispose();
-      renderer.forceContextLoss?.();
-      if(dom.game.contains(renderer.domElement))dom.game.removeChild(renderer.domElement);
+      gameRenderer.dispose();
     };
   },[]);
 
@@ -3063,6 +3465,25 @@ export default function Game() {
         <div ref={hitmarkRef} id="game-hitmark" style={{position:'absolute',left:'50%',top:'50%',transform:'translate(-50%,-50%)',width:18,height:18,opacity:0,pointerEvents:'none'}} />
         <div ref={flashRef} style={{position:'absolute',inset:0,background:'#fff',opacity:0,pointerEvents:'none',transition:'opacity .2s'}} />
         <div ref={damageRef} style={{position:'absolute',inset:0,boxShadow:'inset 0 0 120px rgba(255,0,0,0)',pointerEvents:'none',transition:'box-shadow .3s'}} />
+        <div ref={lowHpVignetteRef} className="low-hp-vignette" />
+
+        {/* Killstreak Announcer Banner */}
+        <div ref={killstreakRef} className="killstreak-banner">
+          <div ref={killstreakTextRef} className="killstreak-text">DOUBLE KILL</div>
+          <div ref={killstreakSubRef} className="killstreak-sub">ELIMINATED BOT</div>
+        </div>
+
+        {/* Round MVP Card */}
+        <div ref={mvpCardRef} className="mvp-card-container">
+          <div className="mvp-title">★ ROUND MVP ★</div>
+          <div ref={mvpNameRef} className="mvp-name">PLAYER</div>
+          <div ref={mvpReasonRef} className="mvp-reason">FOR 3 ELIMINATIONS</div>
+        </div>
+
+        {/* Weapon Inspect Hint */}
+        <div className="inspect-hint">
+          <span className="inspect-key">F</span> INSPECT WEAPON
+        </div>
 
         {/* AWP Scope overlay */}
         <div ref={scopeRef} className="game-scope" style={{display:'none'}}>

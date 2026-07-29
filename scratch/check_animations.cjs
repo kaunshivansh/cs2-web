@@ -1,20 +1,40 @@
 const fs = require('fs');
 const path = require('path');
 
-function checkGlb(filename) {
-  const filePath = path.join('/Users/shivanshtiwari/Desktop/cs2/public/assets/models', filename);
+function checkAnimations(filename) {
+  const filePath = path.isAbsolute(filename)
+    ? filename
+    : path.join(__dirname, '../public/assets/models', filename);
   const buffer = fs.readFileSync(filePath);
-  const chunkLength = buffer.readUInt32LE(12);
-  const jsonBuffer = buffer.slice(20, 20 + chunkLength);
-  const gltf = JSON.parse(jsonBuffer.toString('utf8'));
   
+  const magic = buffer.readUInt32LE(0);
+  if (magic !== 0x46546C67) { console.error("Not a GLB file"); return; }
+  
+  const totalLength = buffer.readUInt32LE(8);
+  let offset = 12;
+  let jsonChunk = null;
+  
+  while (offset < totalLength) {
+    const chunkLength = buffer.readUInt32LE(offset);
+    const chunkType = buffer.readUInt32LE(offset + 4);
+    if (chunkType === 0x4E4F534A) {
+      jsonChunk = buffer.slice(offset + 8, offset + 8 + chunkLength);
+      break;
+    }
+    offset += 8 + chunkLength;
+  }
+  
+  if (!jsonChunk) return;
+  const gltf = JSON.parse(jsonChunk.toString('utf8'));
+  console.log("Animations:");
   if (gltf.animations) {
-    const list = gltf.animations.map((anim, i) => `[${i}]: "${anim.name}"`).join('\n');
-    fs.writeFileSync('/Users/shivanshtiwari/Desktop/cs2/scratch/all_animations.txt', list);
-    console.log(`Saved ${gltf.animations.length} animations to scratch/all_animations.txt`);
+    gltf.animations.forEach((anim, idx) => {
+      console.log(`- Animation ${idx}: "${anim.name || 'unnamed'}"`);
+    });
   } else {
-    console.log("No animations found.");
+    console.log("No animations found");
   }
 }
 
-checkGlb('sas__cs2_agent_model_blue.glb');
+const target = process.argv[2] || 'sas__cs2_agent_model_blue.glb';
+checkAnimations(target);

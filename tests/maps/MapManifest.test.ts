@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { MAP_MANIFEST, validateMapManifest } from '../../src/maps/MapManifest.ts';
 
-test('MAP_MANIFEST declares one competitive tactical map with required metadata', () => {
+test('MAP_MANIFEST declares backed competitive tactical map with valid metadata', () => {
   const result = validateMapManifest(MAP_MANIFEST);
 
   assert.deepEqual(result.errors, []);

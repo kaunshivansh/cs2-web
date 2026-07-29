@@ -6,12 +6,27 @@ export interface SpreadInput {
   onGround: boolean;
   crouched: boolean;
   scoped: boolean;
+  timeSinceStationary?: number;
+  timeSinceJump?: number;
+  speed?: number;
+  maxSpeed?: number;
 }
 
 export function computePlayerSpread(weapon: WeaponConfig, input: SpreadInput): number {
+  const isFirstShot = input.recoilIndex <= 1;
+  const timeSinceStat = input.timeSinceStationary ?? 0;
+  const timeSinceJ = input.timeSinceJump ?? 0;
+  
+  if (isFirstShot && timeSinceStat >= 0.3 && timeSinceJ >= 0.5) {
+    return 0;
+  }
+  
+  const speed = input.speed ?? (input.horizontalSpeedRatio * (weapon.moveSpeed || 5.2));
+  const maxSpeed = input.maxSpeed ?? (weapon.moveSpeed || 5.2);
+  const penalty = 1 + (Math.min(speed, maxSpeed) / maxSpeed) * 2.5;
+
   let spread =
-    weapon.spread +
-    clamp(input.horizontalSpeedRatio, 0, 1.4) * weapon.moveSpread +
+    weapon.spread * penalty +
     (input.onGround ? 0 : weapon.airSpread) +
     (input.crouched ? weapon.crouchSpread : 0) +
     Math.min(0.055, input.recoilIndex * 0.0048);
@@ -36,3 +51,4 @@ export function recoverRecoilIndex(recoilIndex: number, dt: number, recoveryRate
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
+

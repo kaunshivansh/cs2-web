@@ -1,8 +1,264 @@
-* { box-sizing: border-box; margin: 0; padding: 0; }
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 html, body, #root {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #0c0f12;
-  font-family: 'Inter', 'Trebuchet MS', Arial, sans-serif;
+  background: #090c10;
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color: #f0f4f8;
+}
+
+/* ─── DAMAGE & LOW HP VIGNETTE ─── */
+.damage-flash {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle, rgba(239, 68, 68, 0) 40%, rgba(239, 68, 68, 0.45) 100%);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.08s ease-out;
+  z-index: 40;
+}
+
+.low-hp-vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle, transparent 50%, rgba(185, 28, 28, 0.6) 100%);
+  pointer-events: none;
+  opacity: 0;
+  animation: pulseVignette 1.2s infinite ease-in-out alternate;
+  z-index: 39;
+}
+
+@keyframes pulseVignette {
+  0% { opacity: 0.2; }
+  100% { opacity: 0.75; }
+}
+
+/* ─── HIT MARKER ─── */
+.hitmarker-container {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  width: 32px;
+  height: 32px;
+  z-index: 50;
+  opacity: 0;
+  transition: opacity 0.05s ease-out, transform 0.1s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.hitmarker-container.active {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1.2);
+}
+
+.hitmarker-line {
+  position: absolute;
+  width: 10px;
+  height: 2px;
+  background: #ffffff;
+  border-radius: 1px;
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.8);
+}
+
+.hitmarker-line.headshot {
+  background: #ff3344;
+  box-shadow: 0 0 10px rgba(255, 51, 68, 0.9);
+}
+
+.hitmarker-line.tl { top: 4px; left: 4px; transform: rotate(45deg); }
+.hitmarker-line.tr { top: 4px; right: 4px; transform: rotate(-45deg); }
+.hitmarker-line.bl { bottom: 4px; left: 4px; transform: rotate(-45deg); }
+.hitmarker-line.br { bottom: 4px; right: 4px; transform: rotate(45deg); }
+
+/* ─── KILLSTREAK ANNOUNCEMENT BANNER ─── */
+.killstreak-banner {
+  position: absolute;
+  top: 22%;
+  left: 50%;
+  transform: translateX(-50%) scale(0.8);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 60;
+  transition: all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.killstreak-banner.show {
+  opacity: 1;
+  transform: translateX(-50%) scale(1);
+}
+
+.killstreak-text {
+  font-size: 26px;
+  font-weight: 900;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  background: linear-gradient(180deg, #fff 0%, #ffcc00 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow: 0 4px 15px rgba(255, 204, 0, 0.5);
+}
+
+.killstreak-sub {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(15, 23, 42, 0.75);
+  padding: 4px 12px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 204, 0, 0.4);
+  backdrop-filter: blur(8px);
+}
+
+/* ─── KILLFEED CARDS ─── */
+.game-kf {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: rgba(15, 23, 42, 0.82);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  animation: slideInFeed 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  font-family: inherit;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+@keyframes slideInFeed {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.game-kf-a { font-weight: 700; }
+.game-kf-b { color: #94a3b8; font-size: 12px; font-weight: 500; }
+.game-kf-hs { color: #ef4444; font-weight: 800; }
+
+/* ─── CS2 BOMB STATUS TOP BAR ─── */
+.cs2-bomb-status {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 16px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  z-index: 45;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.cs2-bomb-status.armed {
+  border-color: #ef4444;
+  box-shadow: 0 0 15px rgba(239, 68, 68, 0.4);
+}
+
+.bomb-pulse-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ef4444;
+  animation: pulseDot 0.8s infinite alternate;
+}
+
+@keyframes pulseDot {
+  0% { opacity: 0.4; transform: scale(0.9); }
+  100% { opacity: 1; transform: scale(1.2); }
+}
+
+/* ─── ROUND END MVP BANNER ─── */
+.mvp-card-container {
+  position: absolute;
+  top: 35%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0.9);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 36px;
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.95));
+  border: 2px solid rgba(255, 215, 0, 0.6);
+  border-radius: 12px;
+  backdrop-filter: blur(16px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.7), 0 0 25px rgba(255, 215, 0, 0.25);
+  z-index: 70;
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.mvp-card-container.show {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.mvp-title {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 3px;
+  color: #ffd700;
+  text-transform: uppercase;
+}
+
+.mvp-name {
+  font-size: 24px;
+  font-weight: 900;
+  color: #ffffff;
+  letter-spacing: 1px;
+}
+
+.mvp-reason {
+  font-size: 13px;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+/* ─── INSPECT & HELPER HINT ─── */
+.inspect-hint {
+  position: absolute;
+  bottom: 24px;
+  right: 24px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.inspect-key {
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  font-weight: 800;
+  color: #fff;
 }

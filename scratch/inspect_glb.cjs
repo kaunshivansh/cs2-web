@@ -2,7 +2,9 @@ const fs = require('fs');
 const path = require('path');
 
 function inspectGlb(filename) {
-  const filePath = path.join('/Users/shivanshtiwari/Desktop/cs2/public/assets/models', filename);
+  const filePath = path.isAbsolute(filename)
+    ? filename
+    : path.join(__dirname, '../public/assets/models', filename);
   const buffer = fs.readFileSync(filePath);
   
   // Find JSON chunk
@@ -46,4 +48,5 @@ function inspectGlb(filename) {
   }
 }
 
-inspectGlb('city.glb');
+const targetFile = process.argv[2] || 'city.glb';
+inspectGlb(targetFile);

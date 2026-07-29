@@ -196,11 +196,77 @@ export class AudioSystem {
   public playHitSound(headshot = false) {
     this.unlock();
     if (headshot) {
-      this.playNoise(0.12, 3800, 0.35, 'sine', 4200, 8);
-      this.playNoise(0.06, 5200, 0.2, 'sine', 5800, 6);
+      this.playHeadshotDink();
     } else {
       this.playNoise(0.06, 2200, 0.2, 'triangle', 3000, 4);
     }
+  }
+
+  public playHeadshotDink() {
+    this.unlock();
+    // High metal dink + crunch
+    this.playNoise(0.14, 4200, 0.4, 'sine', 5200, 10);
+    this.playNoise(0.07, 6500, 0.25, 'sine', 7000, 8);
+    this.playBurst(0.05, 0.22, 2800, 'highpass', 3);
+  }
+
+  public playKillChime(streak = 1) {
+    this.unlock();
+    const baseFreq = 520 + Math.min(streak, 5) * 120;
+    this.playNoise(0.12, baseFreq, 0.3, 'sine', 1600, 4);
+    setTimeout(() => {
+      this.playNoise(0.18, baseFreq * 1.25, 0.35, 'sine', 2200, 5);
+    }, 80);
+  }
+
+  public playInspectSound() {
+    this.unlock();
+    this.playNoise(0.08, 1200, 0.1, 'triangle', 2000, 2);
+    setTimeout(() => {
+      this.playNoise(0.06, 1800, 0.08, 'sine', 2600, 3);
+    }, 90);
+  }
+
+  public playLowHpHeartbeat() {
+    this.unlock();
+    const { ctx, transientGain } = this.ensureGraph();
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(65, now);
+    osc.frequency.exponentialRampToValueAtTime(35, now + 0.14);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.35, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+    osc.connect(g);
+    g.connect(transientGain);
+    osc.start(now);
+    osc.stop(now + 0.16);
+  }
+
+  public playFlashbangRing() {
+    this.unlock();
+    this.playNoise(1.2, 3200, 0.25, 'sine', 4000, 12);
+  }
+
+  public playAnnouncerVoice(type: 'doubleKill' | 'tripleKill' | 'quadKill' | 'ace' | 'headshot' | 'bombPlanted' | 'bombDefused' | 'ctWin' | 'tWin') {
+    this.unlock();
+    const pitchMap: Record<string, [number, number]> = {
+      doubleKill: [440, 587],
+      tripleKill: [523, 659],
+      quadKill: [659, 783],
+      ace: [783, 1046],
+      headshot: [880, 1174],
+      bombPlanted: [330, 220],
+      bombDefused: [440, 660],
+      ctWin: [523, 659],
+      tWin: [392, 493],
+    };
+    const [f1, f2] = pitchMap[type] || [440, 550];
+    this.playNoise(0.18, f1, 0.25, 'sawtooth', 1800, 3);
+    setTimeout(() => {
+      this.playNoise(0.25, f2, 0.3, 'sawtooth', 2400, 4);
+    }, 140);
   }
 
   public playFootstep(speedRatio = 1, walking = false) {
