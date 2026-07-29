@@ -4,6 +4,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
+import { QualityTier } from './AdaptiveQuality.ts';
 
 export class GameRenderer {
   renderer: THREE.WebGLRenderer;
@@ -13,10 +14,11 @@ export class GameRenderer {
   
   bloomPass: UnrealBloomPass;
   smaaPass: SMAAPass;
+  qualityTier: QualityTier = 'medium';
 
   constructor(canvasParent: HTMLElement, width: number, height: number) {
     this.renderer = new THREE.WebGLRenderer({
-      antialias: false, // SMAA pass handles anti-aliasing in post-processing stack
+      antialias: false,
       powerPreference: "high-performance",
       failIfMajorPerformanceCaveat: false,
       stencil: false,
@@ -26,28 +28,25 @@ export class GameRenderer {
     this.renderer.setPixelRatio(initialPixelRatio);
     this.renderer.setSize(width, height);
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Soft shadows
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.15; // Cinematic exposure
+    this.renderer.toneMappingExposure = 1.15;
     this.renderer.info.autoReset = false;
     
     canvasParent.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x8fa4b2);
-    
-    // Exponential fog for depth
     this.scene.fog = new THREE.FogExp2(0x7f95a2, 0.008);
 
     this.camera = new THREE.PerspectiveCamera(75, width / height, 0.05, 500);
 
-    // --- Post Processing Stack ---
     const renderTarget = new THREE.WebGLRenderTarget(width, height, {
       minFilter: THREE.LinearFilter,
       magFilter: THREE.LinearFilter,
       format: THREE.RGBAFormat,
-      type: THREE.HalfFloatType, // HDR precision
+      type: THREE.HalfFloatType,
     });
 
     this.composer = new EffectComposer(this.renderer, renderTarget);
@@ -55,22 +54,43 @@ export class GameRenderer {
     const renderPass = new RenderPass(this.scene, this.camera);
     this.composer.addPass(renderPass);
 
-    // Bloom
     this.bloomPass = new UnrealBloomPass(
       new THREE.Vector2(width, height),
-      0.45, // strength
-      0.35, // radius
-      0.82  // threshold
+      0.45,
+      0.35,
+      0.82
     );
     this.composer.addPass(this.bloomPass);
 
-    // Anti-Aliasing (SMAA)
     this.smaaPass = new SMAAPass();
     this.composer.addPass(this.smaaPass);
 
-    // Tone mapping and output color space
     const outputPass = new OutputPass();
     this.composer.addPass(outputPass);
+  }
+
+  setQualityTier(tier: QualityTier) {
+    this.qualityTier = tier;
+    if (tier === 'low') {
+      this.renderer.shadowMap.enabled = false;
+      this.bloomPass.enabled = false;
+      this.smaaPass.enabled = false;
+      (this.scene.fog as THREE.FogExp2).density = 0.004;
+    } else if (tier === 'medium') {
+      this.renderer.shadowMap.enabled = true;
+      this.renderer.shadowMap.type = THREE.PCFShadowMap;
+      this.bloomPass.enabled = true;
+      this.bloomPass.strength = 0.25;
+      this.smaaPass.enabled = true;
+      (this.scene.fog as THREE.FogExp2).density = 0.007;
+    } else {
+      this.renderer.shadowMap.enabled = true;
+      this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      this.bloomPass.enabled = true;
+      this.bloomPass.strength = 0.45;
+      this.smaaPass.enabled = true;
+      (this.scene.fog as THREE.FogExp2).density = 0.008;
+    }
   }
 
   setPixelRatio(pixelRatio: number) {

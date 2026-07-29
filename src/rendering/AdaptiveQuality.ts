@@ -5,11 +5,13 @@ export interface AdaptiveQualityOptions {
   minPixelRatio: number;
   maxPixelRatio: number;
   targetFps?: number;
+  onTierChange?: (tier: QualityTier) => void;
 }
 
 export class AdaptiveQualityController {
   public pixelRatio: number;
   public qualityTier: QualityTier = 'medium';
+  public onTierChange?: (tier: QualityTier) => void;
 
   private readonly minPixelRatio: number;
   private readonly maxPixelRatio: number;
@@ -23,6 +25,7 @@ export class AdaptiveQualityController {
     this.maxPixelRatio = options.maxPixelRatio;
     this.targetFrameTime = 1 / (options.targetFps ?? 60);
     this.pixelRatio = clamp(options.initialPixelRatio, this.minPixelRatio, this.maxPixelRatio);
+    this.onTierChange = options.onTierChange;
     this.updateTier();
   }
 
@@ -41,7 +44,7 @@ export class AdaptiveQualityController {
       this.fastFrames = Math.max(0, this.fastFrames - 1);
     }
 
-    const before = this.pixelRatio;
+    const beforeRatio = this.pixelRatio;
     if (this.slowFrames >= 45) {
       this.pixelRatio = clamp(this.pixelRatio - 0.15, this.minPixelRatio, this.maxPixelRatio);
       this.slowFrames = 0;
@@ -53,7 +56,7 @@ export class AdaptiveQualityController {
     }
 
     this.updateTier();
-    return before !== this.pixelRatio;
+    return beforeRatio !== this.pixelRatio;
   }
 
   public get averageFps(): number {
@@ -61,17 +64,18 @@ export class AdaptiveQualityController {
   }
 
   private updateTier() {
+    const previousTier = this.qualityTier;
     if (this.averageFps < 52 || this.pixelRatio <= this.minPixelRatio + 0.2) {
       this.qualityTier = 'low';
-      return;
-    }
-
-    if (this.averageFps > 105 && this.pixelRatio >= 1) {
+    } else if (this.averageFps > 105 && this.pixelRatio >= 1) {
       this.qualityTier = 'high';
-      return;
+    } else {
+      this.qualityTier = 'medium';
     }
 
-    this.qualityTier = 'medium';
+    if (previousTier !== this.qualityTier && this.onTierChange) {
+      this.onTierChange(this.qualityTier);
+    }
   }
 }
 

@@ -48,6 +48,9 @@ import { buildAmmoView, buildScoreboardView } from '../ui/hud/ScoreboardModel';
 import { WEAPONS } from '../weapons/WeaponData';
 import { roomManager, type RoomState, type NetworkPlayer } from '../networking/RoomManager';
 import { MAP_MANIFEST, type TacticalMapDefinition } from '../maps/MapManifest';
+import { MapBVH } from '../maps/MapBVH';
+import { SpatialGrid } from '../maps/SpatialGrid';
+import { extractTightSubColliders } from '../maps/MapLoader';
 
 export default function Game() {
   const [webglError, setWebglError] = useState(false);
@@ -240,8 +243,12 @@ export default function Game() {
       minPixelRatio: 0.75,
       maxPixelRatio: Math.min(devicePixelRatio, 2),
       targetFps: 60,
+      onTierChange: (tier) => {
+        gameRenderer.setQualityTier(tier);
+      },
     });
     gameRenderer.setPixelRatio(adaptiveQuality.pixelRatio);
+    gameRenderer.setQualityTier(adaptiveQuality.qualityTier);
     scene.add(camera);
 
     // Expose core three.js objects for in-page debug overlay tooling
@@ -292,7 +299,10 @@ export default function Game() {
     const tracerCTMat = new THREE.LineBasicMaterial({ color: 0x9ad7ff, transparent: true, opacity: 0.72 });
 
     const colliders: { min: THREE.Vector3; max: THREE.Vector3 }[] = [];
-    try { (window as any).__GAME_DEBUG__ = (window as any).__GAME_DEBUG__ || {}; (window as any).__GAME_DEBUG__.colliders = colliders; } catch (e) {}
+    const spatialGrid = new SpatialGrid(4);
+    const mapBVH = new MapBVH();
+    let debugCollidersGroup: THREE.Group | null = null;
+    try { (window as any).__GAME_DEBUG__ = (window as any).__GAME_DEBUG__ || {}; (window as any).__GAME_DEBUG__.colliders = colliders; (window as any).__GAME_DEBUG__.spatialGrid = spatialGrid; (window as any).__GAME_DEBUG__.mapBVH = mapBVH; } catch (e) {}
     const bots: any[] = [];
     const droppedWeapons: any[] = [];
     let droppedBomb: { pos: THREE.Vector3; baseY: number } | null = null;
@@ -532,10 +542,8 @@ export default function Game() {
       city.traverse(o => { if ((o as THREE.Mesh).isMesh) { (o as THREE.Mesh).geometry.computeBoundingBox(); meshes.push(o as THREE.Mesh); } });
       
       setLoadingStatus('BUILDING PHYSICS');
-      const tempB3 = new THREE.Box3();
-      const vSize = new THREE.Vector3();
+      mapBVH.buildFromScene(city);
 
-      // Optimize: run synchronously as city.glb is small and does not need to yield across ticks
       for (let i = 0; i < meshes.length; i++) {
         const mesh = meshes[i];
         if (!mesh.geometry.boundingBox) continue;
@@ -554,18 +562,28 @@ export default function Game() {
 
         if (isExcluded) continue;
 
-        tempB3.copy(mesh.geometry.boundingBox).applyMatrix4(mesh.matrixWorld);
-        tempB3.getSize(vSize);
-        
-        // Exclude huge backdrop/environment scenery (e.g. skybox, background terrain/domes, combined boundaries)
-        if (vSize.x > 30.0 || vSize.z > 30.0) {
-          continue;
+        const subBoxes = extractTightSubColliders(mesh);
+        for (const box of subBoxes) {
+          colliders.push(box);
+          spatialGrid.insert(box);
+          const sizeX = box.max.x - box.min.x;
+          const sizeZ = box.max.z - box.min.z;
+          minimapWalls.push({ x: (box.min.x + box.max.x) / 2, z: (box.min.z + box.max.z) / 2, w: sizeX, d: sizeZ });
         }
+      }
 
-        if (vSize.y > 0.4 && vSize.x > 0.05 && vSize.z > 0.05) {
-          colliders.push({ min: tempB3.min.clone(), max: tempB3.max.clone() });
-          minimapWalls.push({ x:(tempB3.min.x+tempB3.max.x)/2, z:(tempB3.min.z+tempB3.max.z)/2, w:vSize.x, d:vSize.z });
+      const isDebugColliders = typeof window !== 'undefined' && window.location.search.includes('debugColliders=1');
+      if (isDebugColliders) {
+        debugCollidersGroup = new THREE.Group();
+        debugCollidersGroup.name = 'DebugCollidersGroup';
+        for (const c of colliders) {
+          const boxGeo = new THREE.BoxGeometry(c.max.x - c.min.x, c.max.y - c.min.y, c.max.z - c.min.z);
+          const boxMat = new THREE.MeshBasicMaterial({ color: 0x00ff88, wireframe: true });
+          const boxMesh = new THREE.Mesh(boxGeo, boxMat);
+          boxMesh.position.set((c.min.x + c.max.x) / 2, (c.min.y + c.max.y) / 2, (c.min.z + c.max.z) / 2);
+          debugCollidersGroup.add(boxMesh);
         }
+        scene.add(debugCollidersGroup);
       }
 
       // If the GLTF did not include authored spawn/site nodes, fall back to the mapDef entry
@@ -694,10 +712,17 @@ export default function Game() {
         disposeObject3DResources(cityGroup);
         cityGroup = null;
       }
+      if (debugCollidersGroup) {
+        scene.remove(debugCollidersGroup);
+        disposeObject3DResources(debugCollidersGroup);
+        debugCollidersGroup = null;
+      }
 
-      // Clear colliders and minimap walls
+      // Clear colliders and spatial grid
       colliders.length = 0;
       minimapWalls.length = 0;
+      spatialGrid.clear();
+      mapBVH.dispose();
 
       // Clear site markers
       while (siteMarkersGroup.children.length > 0) {
@@ -1431,9 +1456,11 @@ export default function Game() {
          }
       }
 
-      for(const c of colliders){
-        const bh=raycaster.ray.intersectBox(tempBox.set(c.min,c.max),new THREE.Vector3());
-        if(bh){const d=origin.distanceTo(bh);if(!best||d<best.dist)best={dist:d,isWall:true,point:bh};}
+      const bvhHit = mapBVH.raycast(origin, dir);
+      if (bvhHit) {
+        if (!best || bvhHit.dist < best.dist) {
+          best = { dist: bvhHit.dist, isWall: true, point: bvhHit.point };
+        }
       }
       return best;
     }
@@ -1492,13 +1519,15 @@ export default function Game() {
         spawnBlood(hitPoint);
         addKillfeed({name:killer==='player'?'YOU':killer.name,team:killer==='player'?player.team:killer.team},bot,w.name, isHeadshot);
         if(killer==='player')player.money=Math.min(16000,player.money+(w.reward||300));
-        // Alert teammates
-        const radius=20;
-        bots.filter(b=>b.alive&&b.team===bot.team&&b.obj.position.distanceTo(bot.obj.position)<radius).forEach(b=>{
-          b.lastSeenPos=killer==='player'?player.pos.clone():killer.obj?.position.clone()??bot.obj.position.clone();
-          b.lastSeenT=0;
-          if(b.aiState==='hold'||b.aiState==='freeze')b.aiState='search';
-          b.stateT=0;
+        // Alert teammates with trade-frag priority
+        const radius = 28;
+        const killerPos = killer === 'player' ? player.pos.clone() : (killer?.obj?.position.clone() ?? bot.obj.position.clone());
+        bots.filter(b => b.alive && b.team === bot.team && b.obj.position.distanceTo(bot.obj.position) < radius).forEach(b => {
+          b.lastSeenPos = killerPos.clone();
+          b.lastSeenT = 0;
+          b.tradeFragTarget = killerPos.clone();
+          if (b.combatSnapshot) b.combatSnapshot.state = 'engaging';
+          b.stateT = 0;
         });
         checkRoundEnd();
       }
@@ -1519,6 +1548,17 @@ export default function Game() {
         player.deaths++;
         if(player.hasBomb){player.hasBomb=false;const p=player.pos.clone();const bY=player.pos.y-EYE;droppedBomb={pos:p,baseY:bY};spawnDroppedBomb(p,bY);}
         if(byBot?.kills !== undefined) byBot.kills++;
+        if(byBot?.obj){
+          const killerPos = byBot.obj.position.clone();
+          bots.filter(b => b.alive && b.team === player.team).forEach(teammate => {
+            if (teammate.obj.position.distanceTo(player.pos) < 28) {
+              teammate.lastSeenPos = killerPos.clone();
+              teammate.lastSeenT = 0;
+              teammate.tradeFragTarget = killerPos.clone();
+              if (teammate.combatSnapshot) teammate.combatSnapshot.state = 'engaging';
+            }
+          });
+        }
         addKillfeed({name:byBot.name,team:byBot.team},{name:'YOU',team:player.team},w.name, part==='head');
         checkRoundEnd();
       }
@@ -1846,7 +1886,7 @@ export default function Game() {
         { x: player.vel.x, y: player.vel.y, z: player.vel.z },
         dt,
         { radius: 0.3, height: player.height },
-        colliders
+        spatialGrid.getCollidersInRadius(player.pos.x, player.pos.z, 2.5)
       );
 
       player.pos.set(moveRes.position.x, moveRes.position.y, moveRes.position.z);
@@ -1879,13 +1919,7 @@ export default function Game() {
 
     // ─── IMPROVED BOT AI ────────────────────────────────────────────────────────
     function losClear(from:THREE.Vector3,to:THREE.Vector3){
-      tempV1.copy(to).sub(from);const dist=tempV1.length();tempV1.normalize();
-      raycaster.set(from,tempV1);raycaster.far=dist;
-      for(const c of colliders){
-        const h=raycaster.ray.intersectBox(tempBox.set(c.min,c.max),tempV2);
-        if(h&&from.distanceTo(tempV2)<dist-0.1)return false;
-      }
-      return true;
+      return mapBVH.losClear(from, to);
     }
 
     function findEnemy(bot:any){
@@ -1915,12 +1949,14 @@ export default function Game() {
 
     function blocksActor(c:{min:THREE.Vector3;max:THREE.Vector3}) {
       const h = c.max.y - c.min.y;
-      return c.max.y > 0.7 && h > 0.48;
+      return c.max.y > 0.35 && h > 0.35;
     }
 
     function blockedAt(x:number,z:number,r=0.42){
+      const nearby = spatialGrid.getCollidersInRadius(x, z, r + 0.5);
       const mnX=x-r,mxX=x+r,mnZ=z-r,mxZ=z+r;
-      for(const c of colliders){
+      for(let i=0; i<nearby.length; i++){
+        const c = nearby[i];
         if(!blocksActor(c))continue;
         if(mnX<c.max.x&&mxX>c.min.x&&mnZ<c.max.z&&mxZ>c.min.z)return true;
       }
@@ -2260,8 +2296,19 @@ export default function Game() {
         return;
       }
 
-      // Look for enemies
-      const enemy=findEnemy(bot);
+      // Look for enemies (staggered time-sliced perception: 1/3 bots per tick or missing cache)
+      const botIdx = bots.indexOf(bot);
+      let enemy = bot.targetEnemy;
+      if (tickCount % 3 === (botIdx >= 0 ? botIdx % 3 : 0) || !enemy || !enemy.ent || (enemy.ent.hp !== undefined && enemy.ent.hp <= 0)) {
+        enemy = findEnemy(bot);
+        bot.targetEnemy = enemy;
+      }
+
+      if (!bot.profile) {
+        bot.profile = createBotProfile(bot.difficulty || 'medium');
+        bot.peekDiscipline = bot.profile.peekDiscipline;
+        bot.utilityBaitChance = bot.profile.utilityBaitChance;
+      }
       const objectivePos = state.bomb?.pos ?? (state.attackSite==='A' ? A_SITE : B_SITE);
       const nearbyAllies =
         bots.filter(
@@ -3284,8 +3331,9 @@ export default function Game() {
       }
     }
 
-    let last=performance.now(),animId=0,lastBroadcast=0,lastPlayerBroadcast=0;
+    let last=performance.now(),animId=0,lastBroadcast=0,lastPlayerBroadcast=0,tickCount=0;
     function tick(){
+      tickCount++;
       (window as any).__SHARED_CHOKEPOINTS__ = new Map();
       try {
         const now=performance.now();const dt=Math.min(0.05,(now-last)/1000);last=now;

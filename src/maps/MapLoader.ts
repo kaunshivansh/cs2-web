@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
+import { MapBVH } from './MapBVH.ts';
+import { SpatialGrid, AABBCollider } from './SpatialGrid.ts';
 
 export interface MapData {
   spawnCT: THREE.Vector3;
@@ -8,7 +10,9 @@ export interface MapData {
   siteA: THREE.Vector3;
   siteB: THREE.Vector3;
   bounds: THREE.Box3;
-  colliders: { min: THREE.Vector3, max: THREE.Vector3 }[];
+  colliders: AABBCollider[];
+  mapBVH: MapBVH;
+  spatialGrid: SpatialGrid;
 }
 
 export class MapLoader {
@@ -19,7 +23,7 @@ export class MapLoader {
   constructor() {
     this.loader = new GLTFLoader();
     
-    // Setup DRACO for heavily compressed map assets
+    // Setup DRACO for compressed map assets
     const dracoLoader = new DRACOLoader();
     dracoLoader.setDecoderPath('/draco/');
     this.loader.setDRACOLoader(dracoLoader);
@@ -34,9 +38,7 @@ export class MapLoader {
           this.processLoadedMap(this.loadedMap);
           resolve(this.loadedMap);
         },
-        (progress) => {
-          // Can hook into UI for loading screen here
-        },
+        undefined,
         (error) => {
           console.error("Failed to load map:", error);
           reject(error);
@@ -46,25 +48,29 @@ export class MapLoader {
   }
 
   private processLoadedMap(mapGroup: THREE.Group) {
-    const colliders: { min: THREE.Vector3, max: THREE.Vector3 }[] = [];
-    
-    // Reset Data
+    const colliders: AABBCollider[] = [];
+    const mapBVH = new MapBVH();
+    const spatialGrid = new SpatialGrid(4);
+
+    mapGroup.updateMatrixWorld(true);
+    mapBVH.buildFromScene(mapGroup);
+
     this.mapData = {
       spawnCT: new THREE.Vector3(24, 0, 28),
       spawnT: new THREE.Vector3(-24, 0, -36),
       siteA: new THREE.Vector3(-30, 0, -10),
       siteB: new THREE.Vector3(30, 0, -18),
-      bounds: new THREE.Box3(),
-      colliders: []
+      bounds: new THREE.Box3().setFromObject(mapGroup),
+      colliders: [],
+      mapBVH,
+      spatialGrid,
     };
-
-    const tempBox = new THREE.Box3();
 
     mapGroup.traverse((child) => {
       if ((child as THREE.Mesh).isMesh) {
         const mesh = child as THREE.Mesh;
+        const name = (mesh.name || '').toLowerCase();
         
-        // Setup shadows and materials
         mesh.castShadow = true;
         mesh.receiveShadow = true;
 
@@ -73,26 +79,30 @@ export class MapLoader {
           materials.forEach((mat: THREE.Material) => {
             if (mat instanceof THREE.MeshStandardMaterial) {
               if (mat.map) mat.map.colorSpace = THREE.SRGBColorSpace;
-              // AAA environment adjustments
               mat.roughness = Math.max(0.4, mat.roughness); 
             }
           });
         }
 
-        // Generate bounding box colliders for physics
-        // Note: For AAA, we'd use a dedicated convex hull or BVH physics tree (e.g. three-mesh-bvh)
-        // This is a naive AABB extraction for compatibility with the current engine.
-        
-        // Only add collider if it's a structural element (ignore decals, grass, etc based on naming convention)
-        if (!mesh.name.includes('no_col') && !mesh.name.includes('decal')) {
-            mesh.geometry.computeBoundingBox();
-            if (mesh.geometry.boundingBox) {
-                tempBox.copy(mesh.geometry.boundingBox).applyMatrix4(mesh.matrixWorld);
-                colliders.push({ min: tempBox.min.clone(), max: tempBox.max.clone() });
-            }
+        // Exclude non-collidable meshes, skyboxes, decals
+        const isExcluded = 
+          name.includes('no_col') || 
+          name.includes('decal') || 
+          name.includes('road') || 
+          name.includes('line') || 
+          name.includes('cespuglio') ||
+          name.includes('sky') ||
+          name.includes('dome');
+
+        if (!isExcluded) {
+          const subBoxes = extractTightSubColliders(mesh);
+          for (const box of subBoxes) {
+            colliders.push(box);
+            spatialGrid.insert(box);
+          }
         }
 
-        // Extract metadata points (use world-space positions to respect transforms)
+        // Extract metadata points
         if (mesh.name === 'Spawn_CT') {
           const wp = new THREE.Vector3();
           mesh.getWorldPosition(wp);
@@ -118,4 +128,92 @@ export class MapLoader {
 
     this.mapData.colliders = colliders;
   }
+}
+
+/**
+ * Extracts tight sub-colliders for a mesh to avoid bloated AABBs on rotated/curved geometry.
+ */
+export function extractTightSubColliders(mesh: THREE.Mesh, maxSubBoxSize: number = 2.5): AABBCollider[] {
+  mesh.geometry.computeBoundingBox();
+  if (!mesh.geometry.boundingBox) return [];
+
+  const worldBox = mesh.geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld);
+  const size = worldBox.getSize(new THREE.Vector3());
+
+  // Skip tiny/flat/zero-volume surfaces
+  if (size.y < 0.35 || size.x < 0.05 || size.z < 0.05) return [];
+
+  // Skip massive backdrop environment boxes
+  if (size.x > 35 || size.z > 35) return [];
+
+  // Small and already tight
+  if (size.x <= maxSubBoxSize && size.z <= maxSubBoxSize) {
+    return [{ min: worldBox.min.clone(), max: worldBox.max.clone() }];
+  }
+
+  const subColliders: AABBCollider[] = [];
+  const stepsX = Math.ceil(size.x / maxSubBoxSize);
+  const stepsZ = Math.ceil(size.z / maxSubBoxSize);
+
+  const stepXSize = size.x / stepsX;
+  const stepZSize = size.z / stepsZ;
+
+  const posAttr = mesh.geometry.attributes.position;
+  if (!posAttr) return [{ min: worldBox.min.clone(), max: worldBox.max.clone() }];
+
+  const indexAttr = mesh.geometry.index;
+  const vertexCount = posAttr.count;
+  const worldVerts: THREE.Vector3[] = new Array(vertexCount);
+  
+  for (let i = 0; i < vertexCount; i++) {
+    worldVerts[i] = new THREE.Vector3(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i)).applyMatrix4(mesh.matrixWorld);
+  }
+
+  const triangleCount = indexAttr ? indexAttr.count / 3 : vertexCount / 3;
+
+  for (let ix = 0; ix < stepsX; ix++) {
+    for (let iz = 0; iz < stepsZ; iz++) {
+      const cellMinX = worldBox.min.x + ix * stepXSize;
+      const cellMaxX = cellMinX + stepXSize;
+      const cellMinZ = worldBox.min.z + iz * stepZSize;
+      const cellMaxZ = cellMinZ + stepZSize;
+
+      let cellMinY = Infinity;
+      let cellMaxY = -Infinity;
+      let hasTriangles = false;
+
+      for (let t = 0; t < triangleCount; t++) {
+        let i0 = t * 3, i1 = t * 3 + 1, i2 = t * 3 + 2;
+        if (indexAttr) {
+          i0 = indexAttr.getX(t * 3);
+          i1 = indexAttr.getX(t * 3 + 1);
+          i2 = indexAttr.getX(t * 3 + 2);
+        }
+
+        const v0 = worldVerts[i0];
+        const v1 = worldVerts[i1];
+        const v2 = worldVerts[i2];
+
+        const triMinX = Math.min(v0.x, v1.x, v2.x);
+        const triMaxX = Math.max(v0.x, v1.x, v2.x);
+        const triMinZ = Math.min(v0.z, v1.z, v2.z);
+        const triMaxZ = Math.max(v0.z, v1.z, v2.z);
+
+        if (triMinX <= cellMaxX && triMaxX >= cellMinX && triMinZ <= cellMaxZ && triMaxZ >= cellMinZ) {
+          hasTriangles = true;
+          cellMinY = Math.min(cellMinY, v0.y, v1.y, v2.y);
+          cellMaxY = Math.max(cellMaxY, v0.y, v1.y, v2.y);
+        }
+      }
+
+      if (hasTriangles && cellMaxY - cellMinY >= 0.35) {
+        subColliders.push({
+          min: new THREE.Vector3(cellMinX, cellMinY, cellMinZ),
+          max: new THREE.Vector3(cellMaxX, cellMaxY, cellMaxZ),
+        });
+      }
+    }
+  }
+
+  return subColliders.length > 0 ? subColliders : [{ min: worldBox.min.clone(), max: worldBox.max.clone() }];
 }
